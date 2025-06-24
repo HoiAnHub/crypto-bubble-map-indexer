@@ -9,6 +9,7 @@ import (
 	"crypto-bubble-map-indexer/internal/infrastructure/logger"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	"go.uber.org/zap"
 )
 
 // Neo4JTransactionRepository implements TransactionRepository interface
@@ -36,6 +37,23 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
 	defer session.Close(ctx)
 
+	// First, ensure wallets exist
+	createWalletsQuery := `
+		MERGE (from:Wallet {address: $from_address})
+		MERGE (to:Wallet {address: $to_address})
+	`
+	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, createWalletsQuery, map[string]interface{}{
+			"from_address": rel.FromAddress,
+			"to_address":   rel.ToAddress,
+		})
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to ensure wallet nodes exist: %w", err)
+	}
+
+	// Then create or update the relationship
 	query := `
 		MATCH (from:Wallet {address: $from_address})
 		MATCH (to:Wallet {address: $to_address})
@@ -48,7 +66,7 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 			r.tx_details = [{hash: $tx_hash, value: $value, timestamp: $timestamp}]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat($value)),
-			r.tx_count = r.tx_count + 1,
+			r.tx_count = CASE WHEN r.tx_count IS NULL THEN 1 ELSE r.tx_count + 1 END,
 			r.last_tx = $timestamp,
 			r.tx_details = CASE
 				WHEN r.tx_details IS NULL THEN [{hash: $tx_hash, value: $value, timestamp: $timestamp}]
@@ -64,7 +82,7 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 		"tx_hash":      rel.TxHash,
 	}
 
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+	_, err = session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
 		return tx.Run(ctx, query, params)
 	})
 
@@ -109,6 +127,34 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
 	defer session.Close(ctx)
 
+	// First ensure all wallet nodes exist
+	createWalletsQuery := `
+		UNWIND $wallets AS wallet
+		MERGE (w:Wallet {address: wallet})
+	`
+
+	walletsMap := make(map[string]bool)
+	for _, rel := range relationships {
+		walletsMap[rel.FromAddress] = true
+		walletsMap[rel.ToAddress] = true
+	}
+
+	var walletsList []string
+	for address := range walletsMap {
+		walletsList = append(walletsList, address)
+	}
+
+	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, createWalletsQuery, map[string]interface{}{
+			"wallets": walletsList,
+		})
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to ensure wallet nodes exist: %w", err)
+	}
+
+	// Then create or update the relationships
 	query := `
 		UNWIND $relationships as rel
 		MATCH (from:Wallet {address: rel.from_address})
@@ -122,7 +168,7 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 			r.tx_details = [{hash: rel.tx_hash, value: rel.value, timestamp: datetime(rel.timestamp)}]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
-			r.tx_count = r.tx_count + 1,
+			r.tx_count = CASE WHEN r.tx_count IS NULL THEN 1 ELSE r.tx_count + 1 END,
 			r.last_tx = datetime(rel.timestamp),
 			r.tx_details = CASE
 				WHEN r.tx_details IS NULL THEN [{hash: rel.tx_hash, value: rel.value, timestamp: datetime(rel.timestamp)}]
@@ -144,12 +190,33 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		})
 	}
 
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+	_, err = session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
 		return tx.Run(ctx, query, map[string]interface{}{"relationships": relData})
 	})
 
 	if err != nil {
 		return fmt.Errorf("failed to batch create relationships: %w", err)
+	}
+
+	// Verify relationships were created
+	verifyQuery := `
+		MATCH ()-[r:SENT_TO]->()
+		RETURN count(r) as relationship_count
+	`
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, verifyQuery, map[string]interface{}{})
+	})
+
+	if err != nil {
+		r.logger.Warn("Failed to verify relationships", zap.Error(err))
+		return nil
+	}
+
+	records := result.(neo4j.ResultWithContext)
+	if records.Next(ctx) {
+		count := records.Record().Values[0].(int64)
+		r.logger.Info("Current SENT_TO relationship count", zap.Int64("count", count))
 	}
 
 	return nil
