@@ -1,4 +1,4 @@
-.PHONY: help setup build run test clean up down logs status cleanup
+.PHONY: help setup build run test clean up down logs status cleanup clean-neo4j
 
 # Default target
 help:
@@ -13,6 +13,7 @@ help:
 	@echo "  logs      - View logs"
 	@echo "  status    - Check service status"
 	@echo "  cleanup   - Remove Transaction nodes and convert to direct Wallet relationships"
+	@echo "  clean-neo4j - Clean all Neo4j database data"
 
 # Setup development environment
 setup:
@@ -115,3 +116,10 @@ cleanup:
 	@echo "Removing Transaction nodes and creating direct Wallet relationships..."
 	go run scripts/cleanup_transaction_nodes.go
 	@echo "Cleanup complete!"
+
+# Clean Neo4j database data
+clean-neo4j:
+	@echo "Cleaning Neo4j database data..."
+	docker-compose down
+	docker volume rm $(shell docker volume ls -q | grep neo4j) || true
+	@echo "Neo4j data cleaned. Use 'make up' to restart with fresh database."
