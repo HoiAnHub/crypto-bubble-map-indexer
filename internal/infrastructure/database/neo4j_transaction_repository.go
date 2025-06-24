@@ -44,18 +44,30 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 			r.total_value = $value,
 			r.tx_count = 1,
 			r.first_tx = $timestamp,
-			r.last_tx = $timestamp
+			r.last_tx = $timestamp,
+			r.tx_details = [$tx_detail]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat($value)),
 			r.tx_count = r.tx_count + 1,
-			r.last_tx = $timestamp
+			r.last_tx = $timestamp,
+			r.tx_details = CASE
+				WHEN r.tx_details IS NULL THEN [$tx_detail]
+				ELSE r.tx_details + $tx_detail
+			END
 	`
+
+	// Create a tx_detail string in format "hash:value:timestamp"
+	txDetail := fmt.Sprintf("%s:%s:%s",
+		rel.TxHash,
+		rel.Value,
+		rel.Timestamp.Format("2006-01-02T15:04:05.000Z"))
 
 	params := map[string]interface{}{
 		"from_address": rel.FromAddress,
 		"to_address":   rel.ToAddress,
 		"value":        rel.Value,
 		"timestamp":    rel.Timestamp,
+		"tx_detail":    txDetail,
 	}
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -112,11 +124,16 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 			r.total_value = rel.value,
 			r.tx_count = 1,
 			r.first_tx = datetime(rel.timestamp),
-			r.last_tx = datetime(rel.timestamp)
+			r.last_tx = datetime(rel.timestamp),
+			r.tx_details = [rel.tx_detail]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 			r.tx_count = r.tx_count + 1,
-			r.last_tx = datetime(rel.timestamp)
+			r.last_tx = datetime(rel.timestamp),
+			r.tx_details = CASE
+				WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+				ELSE r.tx_details + rel.tx_detail
+			END
 	`
 
 	var relData []map[string]interface{}
@@ -124,11 +141,15 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		// Format the timestamp as ISO-8601 string for Neo4J
 		timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
 
+		// Create a tx_detail string in format "hash:value:timestamp"
+		txDetail := fmt.Sprintf("%s:%s:%s", rel.TxHash, rel.Value, timestampStr)
+
 		relData = append(relData, map[string]interface{}{
 			"from_address": rel.FromAddress,
 			"to_address":   rel.ToAddress,
 			"value":        rel.Value,
 			"timestamp":    timestampStr,
+			"tx_detail":    txDetail,
 		})
 	}
 
