@@ -257,12 +257,34 @@ As of the latest update, the data model has been simplified to only include Wall
    - Properties include: address, first_seen, last_seen, total_transactions, total_sent, total_received, network
 
 2. **SENT_TO Relationships**: Direct connections between wallets
-   - Properties include: total_value, tx_count, first_tx, last_tx
+   - Summary properties: total_value, tx_count, first_tx, last_tx
+   - Detailed transaction history: tx_details (array of transaction objects containing):
+     - hash: Transaction hash
+     - value: Transaction value
+     - timestamp: When the transaction occurred
 
-This simplified model removes the Transaction nodes that were previously present. This leads to:
+This simplified model removes the Transaction nodes that were previously present while preserving all transaction details. This approach offers several benefits:
+
 - Cleaner graph visualization
 - More straightforward queries
 - Better performance for traversals between wallets
+- Preserved complete transaction history for analysis
+
+Example of accessing transaction details in Cypher:
+
+```cypher
+// Get all transactions between two wallets
+MATCH (from:Wallet {address: '0x123...'})-[r:SENT_TO]->(to:Wallet {address: '0x456...'})
+RETURN r.tx_details
+
+// Find wallets with high-value individual transactions
+MATCH (from:Wallet)-[r:SENT_TO]->(to:Wallet)
+UNWIND r.tx_details as tx
+WHERE toFloat(tx.value) > 10000000000000000000  // > 10 ETH
+RETURN from.address, to.address, tx.hash, tx.value, tx.timestamp
+ORDER BY toFloat(tx.value) DESC
+LIMIT 10
+```
 
 To migrate existing data to this model:
 
@@ -274,4 +296,5 @@ make cleanup
 This script will:
 1. Convert all existing wallet-transaction-wallet patterns to direct wallet-to-wallet relationships
 2. Combine multiple transactions between the same wallets into a single relationship with summarized properties
-3. Remove all Transaction nodes from the database
+3. Preserve all transaction details in the tx_details array
+4. Remove all Transaction nodes from the database
