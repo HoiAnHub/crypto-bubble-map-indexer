@@ -37,28 +37,22 @@ func NewIndexingApplicationService(
 func (s *IndexingApplicationService) ProcessTransaction(ctx context.Context, tx *entity.Transaction) error {
 	s.logger.Info("Processing transaction", zap.String("hash", tx.Hash))
 
-	// Create transaction node
-	txNode := &entity.TransactionNode{
-		Hash:        tx.Hash,
-		BlockNumber: tx.BlockNumber,
-		Value:       tx.Value,
-		GasUsed:     tx.GasUsed,
-		GasPrice:    tx.GasPrice,
-		Timestamp:   tx.Timestamp,
-		Network:     tx.Network,
-	}
-
-	if err := s.transactionRepo.CreateTransaction(ctx, txNode); err != nil {
-		return fmt.Errorf("failed to create transaction: %w", err)
-	}
-
 	// Create or update wallets
 	if err := s.createOrUpdateWallets(ctx, tx); err != nil {
 		return fmt.Errorf("failed to create/update wallets: %w", err)
 	}
 
-	// Create transaction relationship
-	if err := s.createTransactionRelationship(ctx, tx); err != nil {
+	// Create direct relationship between wallets
+	rel := &entity.TransactionRelationship{
+		FromAddress: tx.From,
+		ToAddress:   tx.To,
+		Value:       tx.Value,
+		GasPrice:    tx.GasPrice,
+		Timestamp:   tx.Timestamp,
+		TxHash:      tx.Hash,
+	}
+
+	if err := s.transactionRepo.CreateTransactionRelationship(ctx, rel); err != nil {
 		return fmt.Errorf("failed to create transaction relationship: %w", err)
 	}
 
@@ -71,23 +65,10 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 	s.logger.Info("Processing transaction batch", zap.Int("count", len(transactions)))
 
 	// Prepare batch data
-	var txNodes []*entity.TransactionNode
 	var relationships []*entity.TransactionRelationship
 	walletMap := make(map[string]*entity.Wallet)
 
 	for _, tx := range transactions {
-		// Create transaction node
-		txNode := &entity.TransactionNode{
-			Hash:        tx.Hash,
-			BlockNumber: tx.BlockNumber,
-			Value:       tx.Value,
-			GasUsed:     tx.GasUsed,
-			GasPrice:    tx.GasPrice,
-			Timestamp:   tx.Timestamp,
-			Network:     tx.Network,
-		}
-		txNodes = append(txNodes, txNode)
-
 		// Prepare wallet data
 		s.prepareWalletData(tx, walletMap)
 
@@ -101,11 +82,6 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 			TxHash:      tx.Hash,
 		}
 		relationships = append(relationships, rel)
-	}
-
-	// Batch create transactions
-	if err := s.transactionRepo.BatchCreateTransactions(ctx, txNodes); err != nil {
-		return fmt.Errorf("failed to batch create transactions: %w", err)
 	}
 
 	// Batch create/update wallets
@@ -170,20 +146,6 @@ func (s *IndexingApplicationService) createOrUpdateWallets(ctx context.Context, 
 	}
 
 	return nil
-}
-
-// createTransactionRelationship creates the relationship between wallets
-func (s *IndexingApplicationService) createTransactionRelationship(ctx context.Context, tx *entity.Transaction) error {
-	rel := &entity.TransactionRelationship{
-		FromAddress: tx.From,
-		ToAddress:   tx.To,
-		Value:       tx.Value,
-		GasPrice:    tx.GasPrice,
-		Timestamp:   tx.Timestamp,
-		TxHash:      tx.Hash,
-	}
-
-	return s.transactionRepo.CreateTransactionRelationship(ctx, rel)
 }
 
 // prepareWalletData prepares wallet data for batch processing

@@ -1,4 +1,4 @@
-.PHONY: help setup build run test clean up down logs status
+.PHONY: help setup build run test clean up down logs status cleanup
 
 # Default target
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "  down      - Stop services"
 	@echo "  logs      - View logs"
 	@echo "  status    - Check service status"
+	@echo "  cleanup   - Remove Transaction nodes and convert to direct Wallet relationships"
 
 # Setup development environment
 setup:
@@ -108,3 +109,9 @@ generate:
 	@echo "Generating mocks..."
 	mockgen -source=internal/domain/repository/wallet_repository.go -destination=internal/domain/repository/mocks/wallet_repository_mock.go
 	mockgen -source=internal/domain/repository/transaction_repository.go -destination=internal/domain/repository/mocks/transaction_repository_mock.go
+
+# Run the database cleanup script to remove Transaction nodes
+cleanup:
+	@echo "Removing Transaction nodes and creating direct Wallet relationships..."
+	go run scripts/cleanup_transaction_nodes.go
+	@echo "Cleanup complete!"

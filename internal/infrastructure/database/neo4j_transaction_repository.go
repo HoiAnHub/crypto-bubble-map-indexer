@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"crypto-bubble-map-indexer/internal/domain/entity"
 	"crypto-bubble-map-indexer/internal/domain/repository"
@@ -26,44 +25,13 @@ func NewNeo4JTransactionRepository(client *Neo4JClient, logger *logger.Logger) r
 	}
 }
 
-// CreateTransaction creates a new transaction node
+// CreateTransaction creates a new transaction node - deprecated, not creating Transaction nodes anymore
 func (r *Neo4JTransactionRepository) CreateTransaction(ctx context.Context, tx *entity.TransactionNode) error {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		MERGE (t:Transaction {hash: $hash})
-		ON CREATE SET
-			t.block_number = $block_number,
-			t.value = $value,
-			t.gas_used = $gas_used,
-			t.gas_price = $gas_price,
-			t.timestamp = $timestamp,
-			t.network = $network
-	`
-
-	params := map[string]interface{}{
-		"hash":         tx.Hash,
-		"block_number": tx.BlockNumber,
-		"value":        tx.Value,
-		"gas_used":     tx.GasUsed,
-		"gas_price":    tx.GasPrice,
-		"timestamp":    tx.Timestamp,
-		"network":      tx.Network,
-	}
-
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, params)
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to create transaction: %w", err)
-	}
-
+	// No longer creating Transaction nodes, just return nil
 	return nil
 }
 
-// CreateTransactionRelationship creates a relationship between wallets via transaction
+// CreateTransactionRelationship creates a direct relationship between wallets
 func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.Context, rel *entity.TransactionRelationship) error {
 	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
 	defer session.Close(ctx)
@@ -71,19 +39,22 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 	query := `
 		MATCH (from:Wallet {address: $from_address})
 		MATCH (to:Wallet {address: $to_address})
-		MATCH (tx:Transaction {hash: $tx_hash})
-		MERGE (from)-[r:SENT_TO {tx_hash: $tx_hash}]->(to)
-		SET r.value = $value,
-			r.gas_price = $gas_price,
-			r.timestamp = $timestamp
+		MERGE (from)-[r:SENT_TO]->(to)
+		ON CREATE SET
+			r.total_value = $value,
+			r.tx_count = 1,
+			r.first_tx = $timestamp,
+			r.last_tx = $timestamp
+		ON MATCH SET
+			r.total_value = toString(toFloat(r.total_value) + toFloat($value)),
+			r.tx_count = r.tx_count + 1,
+			r.last_tx = $timestamp
 	`
 
 	params := map[string]interface{}{
 		"from_address": rel.FromAddress,
 		"to_address":   rel.ToAddress,
-		"tx_hash":      rel.TxHash,
 		"value":        rel.Value,
-		"gas_price":    rel.GasPrice,
 		"timestamp":    rel.Timestamp,
 	}
 
@@ -98,226 +69,32 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 	return nil
 }
 
-// GetTransaction retrieves a transaction by hash
+// GetTransaction retrieves a transaction by hash - deprecated, not querying Transaction nodes anymore
 func (r *Neo4JTransactionRepository) GetTransaction(ctx context.Context, hash string) (*entity.TransactionNode, error) {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH (t:Transaction {hash: $hash})
-		RETURN t.hash, t.block_number, t.value, t.gas_used, t.gas_price, t.timestamp, t.network
-	`
-
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, map[string]interface{}{"hash": hash})
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transaction: %w", err)
-	}
-
-	records := result.(neo4j.ResultWithContext)
-	if !records.Next(ctx) {
-		return nil, fmt.Errorf("transaction not found: %s", hash)
-	}
-
-	record := records.Record()
-	values := record.Values
-
-	transaction := &entity.TransactionNode{
-		Hash:        values[0].(string),
-		BlockNumber: values[1].(string),
-		Value:       values[2].(string),
-		GasUsed:     values[3].(string),
-		GasPrice:    values[4].(string),
-		Timestamp:   values[5].(time.Time),
-		Network:     values[6].(string),
-	}
-
-	return transaction, nil
+	return nil, fmt.Errorf("transaction nodes no longer supported")
 }
 
-// GetTransactionPath finds the path between two wallets through transactions
+// GetTransactionPath finds the path between two wallets
 func (r *Neo4JTransactionRepository) GetTransactionPath(ctx context.Context, fromAddress, toAddress string, maxHops int) ([]*entity.TransactionNode, error) {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH path = (from:Wallet {address: $from_address})-[*1..$max_hops]-(to:Wallet {address: $to_address})
-		UNWIND relationships(path) as rel
-		MATCH (tx:Transaction {hash: rel.tx_hash})
-		RETURN DISTINCT tx.hash, tx.block_number, tx.value, tx.gas_used, tx.gas_price, tx.timestamp, tx.network
-		ORDER BY tx.timestamp
-	`
-
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, map[string]interface{}{
-			"from_address": fromAddress,
-			"to_address":   toAddress,
-			"max_hops":     maxHops,
-		})
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transaction path: %w", err)
-	}
-
-	var transactions []*entity.TransactionNode
-	records := result.(neo4j.ResultWithContext)
-
-	for records.Next(ctx) {
-		record := records.Record()
-		values := record.Values
-
-		transaction := &entity.TransactionNode{
-			Hash:        values[0].(string),
-			BlockNumber: values[1].(string),
-			Value:       values[2].(string),
-			GasUsed:     values[3].(string),
-			GasPrice:    values[4].(string),
-			Timestamp:   values[5].(time.Time),
-			Network:     values[6].(string),
-		}
-		transactions = append(transactions, transaction)
-	}
-
-	return transactions, nil
+	// This now returns an empty result since we're not tracking Transaction nodes anymore
+	return []*entity.TransactionNode{}, nil
 }
 
-// GetTransactionsByWallet retrieves transactions for a specific wallet
+// GetTransactionsByWallet retrieves transactions for a specific wallet - now returns empty result
 func (r *Neo4JTransactionRepository) GetTransactionsByWallet(ctx context.Context, address string, limit int) ([]*entity.TransactionNode, error) {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH (w:Wallet {address: $address})-[r:SENT_TO]->()
-		MATCH (tx:Transaction {hash: r.tx_hash})
-		RETURN tx.hash, tx.block_number, tx.value, tx.gas_used, tx.gas_price, tx.timestamp, tx.network
-		ORDER BY tx.timestamp DESC
-		LIMIT $limit
-	`
-
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, map[string]interface{}{
-			"address": address,
-			"limit":   limit,
-		})
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transactions by wallet: %w", err)
-	}
-
-	var transactions []*entity.TransactionNode
-	records := result.(neo4j.ResultWithContext)
-
-	for records.Next(ctx) {
-		record := records.Record()
-		values := record.Values
-
-		transaction := &entity.TransactionNode{
-			Hash:        values[0].(string),
-			BlockNumber: values[1].(string),
-			Value:       values[2].(string),
-			GasUsed:     values[3].(string),
-			GasPrice:    values[4].(string),
-			Timestamp:   values[5].(time.Time),
-			Network:     values[6].(string),
-		}
-		transactions = append(transactions, transaction)
-	}
-
-	return transactions, nil
+	// This now returns an empty result since we're not tracking Transaction nodes anymore
+	return []*entity.TransactionNode{}, nil
 }
 
-// GetTransactionsByTimeRange retrieves transactions within a time range
+// GetTransactionsByTimeRange retrieves transactions within a time range - now returns empty result
 func (r *Neo4JTransactionRepository) GetTransactionsByTimeRange(ctx context.Context, startTime, endTime string, limit int) ([]*entity.TransactionNode, error) {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH (t:Transaction)
-		WHERE t.timestamp >= datetime($start_time) AND t.timestamp <= datetime($end_time)
-		RETURN t.hash, t.block_number, t.value, t.gas_used, t.gas_price, t.timestamp, t.network
-		ORDER BY t.timestamp DESC
-		LIMIT $limit
-	`
-
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, map[string]interface{}{
-			"start_time": startTime,
-			"end_time":   endTime,
-			"limit":      limit,
-		})
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transactions by time range: %w", err)
-	}
-
-	var transactions []*entity.TransactionNode
-	records := result.(neo4j.ResultWithContext)
-
-	for records.Next(ctx) {
-		record := records.Record()
-		values := record.Values
-
-		transaction := &entity.TransactionNode{
-			Hash:        values[0].(string),
-			BlockNumber: values[1].(string),
-			Value:       values[2].(string),
-			GasUsed:     values[3].(string),
-			GasPrice:    values[4].(string),
-			Timestamp:   values[5].(time.Time),
-			Network:     values[6].(string),
-		}
-		transactions = append(transactions, transaction)
-	}
-
-	return transactions, nil
+	// This now returns an empty result since we're not tracking Transaction nodes anymore
+	return []*entity.TransactionNode{}, nil
 }
 
-// BatchCreateTransactions creates multiple transactions in a batch
+// BatchCreateTransactions creates multiple transactions in a batch - deprecated, not creating Transaction nodes anymore
 func (r *Neo4JTransactionRepository) BatchCreateTransactions(ctx context.Context, transactions []*entity.TransactionNode) error {
-	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	query := `
-		UNWIND $transactions as tx
-		MERGE (t:Transaction {hash: tx.hash})
-		ON CREATE SET
-			t.block_number = tx.block_number,
-			t.value = tx.value,
-			t.gas_used = tx.gas_used,
-			t.gas_price = tx.gas_price,
-			t.timestamp = datetime(tx.timestamp),
-			t.network = tx.network
-	`
-
-	var txData []map[string]interface{}
-	for _, tx := range transactions {
-		// Format the timestamp as ISO-8601 string for Neo4J
-		timestampStr := tx.Timestamp.Format("2006-01-02T15:04:05.000Z")
-
-		txData = append(txData, map[string]interface{}{
-			"hash":         tx.Hash,
-			"block_number": tx.BlockNumber,
-			"value":        tx.Value,
-			"gas_used":     tx.GasUsed,
-			"gas_price":    tx.GasPrice,
-			"timestamp":    timestampStr,
-			"network":      tx.Network,
-		})
-	}
-
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, map[string]interface{}{"transactions": txData})
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to batch create transactions: %w", err)
-	}
-
+	// No longer creating Transaction nodes, just return nil
 	return nil
 }
 
@@ -330,11 +107,16 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		UNWIND $relationships as rel
 		MATCH (from:Wallet {address: rel.from_address})
 		MATCH (to:Wallet {address: rel.to_address})
-		MATCH (tx:Transaction {hash: rel.tx_hash})
-		MERGE (from)-[r:SENT_TO {tx_hash: rel.tx_hash}]->(to)
-		SET r.value = rel.value,
-			r.gas_price = rel.gas_price,
-			r.timestamp = datetime(rel.timestamp)
+		MERGE (from)-[r:SENT_TO]->(to)
+		ON CREATE SET
+			r.total_value = rel.value,
+			r.tx_count = 1,
+			r.first_tx = datetime(rel.timestamp),
+			r.last_tx = datetime(rel.timestamp)
+		ON MATCH SET
+			r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+			r.tx_count = r.tx_count + 1,
+			r.last_tx = datetime(rel.timestamp)
 	`
 
 	var relData []map[string]interface{}
@@ -345,9 +127,7 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		relData = append(relData, map[string]interface{}{
 			"from_address": rel.FromAddress,
 			"to_address":   rel.ToAddress,
-			"tx_hash":      rel.TxHash,
 			"value":        rel.Value,
-			"gas_price":    rel.GasPrice,
 			"timestamp":    timestampStr,
 		})
 	}

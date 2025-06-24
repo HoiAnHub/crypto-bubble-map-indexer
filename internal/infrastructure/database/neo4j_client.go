@@ -84,7 +84,6 @@ func (n *Neo4JClient) setupSchema(ctx context.Context) error {
 	// Create constraints
 	constraints := []string{
 		"CREATE CONSTRAINT wallet_address IF NOT EXISTS FOR (w:Wallet) REQUIRE w.address IS UNIQUE",
-		"CREATE CONSTRAINT transaction_hash IF NOT EXISTS FOR (t:Transaction) REQUIRE t.hash IS UNIQUE",
 	}
 
 	for _, constraint := range constraints {
@@ -100,8 +99,7 @@ func (n *Neo4JClient) setupSchema(ctx context.Context) error {
 	indexes := []string{
 		"CREATE INDEX wallet_first_seen IF NOT EXISTS FOR (w:Wallet) ON (w.first_seen)",
 		"CREATE INDEX wallet_last_seen IF NOT EXISTS FOR (w:Wallet) ON (w.last_seen)",
-		"CREATE INDEX transaction_timestamp IF NOT EXISTS FOR (t:Transaction) ON (t.timestamp)",
-		"CREATE INDEX transaction_block_number IF NOT EXISTS FOR (t:Transaction) ON (t.block_number)",
+		"CREATE INDEX wallet_network IF NOT EXISTS FOR (w:Wallet) ON (w.network)",
 	}
 
 	for _, index := range indexes {
@@ -110,6 +108,23 @@ func (n *Neo4JClient) setupSchema(ctx context.Context) error {
 		})
 		if err != nil {
 			n.logger.Warn("Failed to create index", zap.String("index", index), zap.Error(err))
+		}
+	}
+
+	// Drop transaction-related constraints and indexes if they exist
+	// Note: In Neo4j 4.x+ dropping a constraint will also drop its associated index
+	dropStatements := []string{
+		"DROP CONSTRAINT transaction_hash IF EXISTS",
+		"DROP INDEX transaction_timestamp IF EXISTS",
+		"DROP INDEX transaction_block_number IF EXISTS",
+	}
+
+	for _, statement := range dropStatements {
+		_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+			return tx.Run(ctx, statement, nil)
+		})
+		if err != nil {
+			n.logger.Warn("Failed to drop transaction schema element", zap.String("statement", statement), zap.Error(err))
 		}
 	}
 

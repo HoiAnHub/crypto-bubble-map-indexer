@@ -248,3 +248,30 @@ crypto-bubble-map-indexer/
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Data Model Changes (Direct Wallet to Wallet)
+
+As of the latest update, the data model has been simplified to only include Wallet nodes with direct relationships between them:
+
+1. **Wallet Nodes**: Each node represents an Ethereum wallet/address
+   - Properties include: address, first_seen, last_seen, total_transactions, total_sent, total_received, network
+
+2. **SENT_TO Relationships**: Direct connections between wallets
+   - Properties include: total_value, tx_count, first_tx, last_tx
+
+This simplified model removes the Transaction nodes that were previously present. This leads to:
+- Cleaner graph visualization
+- More straightforward queries
+- Better performance for traversals between wallets
+
+To migrate existing data to this model:
+
+```bash
+# Run the cleanup script to convert the database
+make cleanup
+```
+
+This script will:
+1. Convert all existing wallet-transaction-wallet patterns to direct wallet-to-wallet relationships
+2. Combine multiple transactions between the same wallets into a single relationship with summarized properties
+3. Remove all Transaction nodes from the database
