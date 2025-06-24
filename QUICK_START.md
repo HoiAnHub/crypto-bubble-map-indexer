@@ -15,7 +15,7 @@ The easiest way to run the Crypto Bubble Map Indexer is using Docker:
 
 ```bash
 # Clone the repository
-git clone https://github.com/haitranwang/crypto-bubble-map-indexer.git
+git clone https://github.com/HoiAnHub/crypto-bubble-map-indexer.git
 cd crypto-bubble-map-indexer
 
 # Create environment file
@@ -40,6 +40,24 @@ chmod +x scripts/vps-deploy.sh
 # Run the deployment script
 ./scripts/vps-deploy.sh
 ```
+
+## Deployment Result
+🎉 Deployment completed!
+
+📊 Service URLs:
+  • API Health: http://45.149.206.55:8080/health
+  • Neo4J Browser: http://45.149.206.55:7474
+  • Neo4J Bolt: bolt://45.149.206.55:7687
+
+🔧 Management Commands:
+  • View logs: docker logs crypto-bubble-map-indexer
+  • Neo4J logs: docker logs crypto-bubble-map-neo4j
+  • Restart services: docker-compose restart
+  • Stop services: docker-compose down
+
+🧪 Testing Commands:
+  • Check API health: curl http://45.149.206.55:8080/health
+
 
 The script will:
 1. Check prerequisites
@@ -158,22 +176,6 @@ If you experience performance issues:
 4. Consider scaling Neo4J for larger datasets
 
   API is not accessible remotely. Check firewall configuration.
-
-🎉 Deployment completed!
-
-📊 Service URLs:
-  • API Health: http://45.149.206.55:8080/health
-  • Neo4J Browser: http://45.149.206.55:7474
-  • Neo4J Bolt: bolt://45.149.206.55:7687
-
-🔧 Management Commands:
-  • View logs: docker logs crypto-bubble-map-indexer
-  • Neo4J logs: docker logs crypto-bubble-map-neo4j
-  • Restart services: docker-compose restart
-  • Stop services: docker-compose down
-
-🧪 Testing Commands:
-  • Check API health: curl http://45.149.206.55:8080/health
 
 ## Next Steps
 
