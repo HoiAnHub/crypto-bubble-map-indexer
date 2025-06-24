@@ -157,6 +157,24 @@ If you experience performance issues:
 3. Adjust Neo4J memory settings in docker-compose.yml
 4. Consider scaling Neo4J for larger datasets
 
+  API is not accessible remotely. Check firewall configuration.
+
+🎉 Deployment completed!
+
+📊 Service URLs:
+  • API Health: http://45.149.206.55:8080/health
+  • Neo4J Browser: http://45.149.206.55:7474
+  • Neo4J Bolt: bolt://45.149.206.55:7687
+
+🔧 Management Commands:
+  • View logs: docker logs crypto-bubble-map-indexer
+  • Neo4J logs: docker logs crypto-bubble-map-neo4j
+  • Restart services: docker-compose restart
+  • Stop services: docker-compose down
+
+🧪 Testing Commands:
+  • Check API health: curl http://45.149.206.55:8080/health
+
 ## Next Steps
 
 - Explore the Neo4J browser to visualize the transaction graph
