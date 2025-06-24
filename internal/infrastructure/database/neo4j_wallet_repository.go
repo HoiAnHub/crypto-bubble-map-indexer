@@ -162,8 +162,9 @@ func (r *Neo4JWalletRepository) GetWalletConnections(ctx context.Context, addres
 
 	query := `
 		MATCH (w:Wallet {address: $address})-[r:SENT_TO]->(other:Wallet)
-		RETURN w.address, other.address, r.total_value, r.tx_count, r.first_tx, r.last_tx, r.tx_details
-		ORDER BY toFloat(r.total_value) DESC
+		WITH w, other, sum(toFloat(r.value)) as total_value, count(r) as tx_count, min(r.timestamp) as first_tx, max(r.timestamp) as last_tx
+		RETURN w.address, other.address, total_value, tx_count, first_tx, last_tx
+		ORDER BY total_value DESC
 		LIMIT $limit
 	`
 
@@ -185,21 +186,6 @@ func (r *Neo4JWalletRepository) GetWalletConnections(ctx context.Context, addres
 		record := records.Record()
 		values := record.Values
 
-		// Process tx_details if available
-		var txDetails []entity.TransactionDetail
-		if values[6] != nil {
-			detailsArray := values[6].([]interface{})
-			for _, detail := range detailsArray {
-				detailMap := detail.(map[string]interface{})
-				txDetail := entity.TransactionDetail{
-					Hash:      detailMap["hash"].(string),
-					Value:     detailMap["value"].(string),
-					Timestamp: detailMap["timestamp"].(time.Time),
-				}
-				txDetails = append(txDetails, txDetail)
-			}
-		}
-
 		connection := &entity.WalletConnection{
 			FromAddress: values[0].(string),
 			ToAddress:   values[1].(string),
@@ -207,7 +193,6 @@ func (r *Neo4JWalletRepository) GetWalletConnections(ctx context.Context, addres
 			TxCount:     values[3].(int64),
 			FirstTx:     values[4].(time.Time),
 			LastTx:      values[5].(time.Time),
-			TxDetails:   txDetails,
 		}
 		connections = append(connections, connection)
 	}

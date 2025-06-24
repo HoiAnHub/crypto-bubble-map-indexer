@@ -24,20 +24,12 @@ type WalletStats struct {
 	TransactionCount    int64  `json:"transaction_count"`
 }
 
-// TransactionDetail represents individual transaction details stored in a relationship
-type TransactionDetail struct {
-	Hash      string    `json:"hash"`
-	Value     string    `json:"value"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
 // WalletConnection represents a connection between two wallets
 type WalletConnection struct {
-	FromAddress string              `json:"from_address"`
-	ToAddress   string              `json:"to_address"`
-	TotalValue  string              `json:"total_value"`
-	TxCount     int64               `json:"tx_count"`
-	FirstTx     time.Time           `json:"first_tx"`
-	LastTx      time.Time           `json:"last_tx"`
-	TxDetails   []TransactionDetail `json:"tx_details"`
+	FromAddress string    `json:"from_address"`
+	ToAddress   string    `json:"to_address"`
+	TotalValue  string    `json:"total_value"`
+	TxCount     int64     `json:"tx_count"`
+	FirstTx     time.Time `json:"first_tx"`
+	LastTx      time.Time `json:"last_tx"`
 }
