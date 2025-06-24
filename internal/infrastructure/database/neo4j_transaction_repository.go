@@ -45,26 +45,30 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 			r.tx_count = 1,
 			r.first_tx = $timestamp,
 			r.last_tx = $timestamp,
-			r.tx_details = [{hash: $tx_hash, value: $value, timestamp: $timestamp_str}]
+			r.tx_details = [$tx_detail]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat($value)),
 			r.tx_count = r.tx_count + 1,
 			r.last_tx = $timestamp,
 			r.tx_details = CASE
-				WHEN r.tx_details IS NULL THEN [{hash: $tx_hash, value: $value, timestamp: $timestamp_str}]
-				ELSE r.tx_details + {hash: $tx_hash, value: $value, timestamp: $timestamp_str}
+				WHEN r.tx_details IS NULL THEN [$tx_detail]
+				ELSE r.tx_details + $tx_detail
 			END
 	`
 
-	timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
+	// Create a tx_detail map instead of a string
+	txDetail := map[string]interface{}{
+		"hash":      rel.TxHash,
+		"value":     rel.Value,
+		"timestamp": rel.Timestamp.Format("2006-01-02T15:04:05.000Z"),
+	}
 
 	params := map[string]interface{}{
-		"from_address":  rel.FromAddress,
-		"to_address":    rel.ToAddress,
-		"value":         rel.Value,
-		"timestamp":     rel.Timestamp,
-		"timestamp_str": timestampStr,
-		"tx_hash":       rel.TxHash,
+		"from_address": rel.FromAddress,
+		"to_address":   rel.ToAddress,
+		"value":        rel.Value,
+		"timestamp":    rel.Timestamp,
+		"tx_detail":    txDetail,
 	}
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -122,14 +126,14 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 			r.tx_count = 1,
 			r.first_tx = datetime(rel.timestamp),
 			r.last_tx = datetime(rel.timestamp),
-			r.tx_details = [{hash: rel.tx_hash, value: rel.value, timestamp: rel.timestamp}]
+			r.tx_details = [rel.tx_detail]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 			r.tx_count = r.tx_count + 1,
 			r.last_tx = datetime(rel.timestamp),
 			r.tx_details = CASE
-				WHEN r.tx_details IS NULL THEN [{hash: rel.tx_hash, value: rel.value, timestamp: rel.timestamp}]
-				ELSE r.tx_details + {hash: rel.tx_hash, value: rel.value, timestamp: rel.timestamp}
+				WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+				ELSE r.tx_details + rel.tx_detail
 			END
 	`
 
@@ -138,12 +142,19 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		// Format the timestamp as ISO-8601 string for Neo4J
 		timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
 
+		// Create a tx_detail map instead of a string
+		txDetail := map[string]interface{}{
+			"hash":      rel.TxHash,
+			"value":     rel.Value,
+			"timestamp": timestampStr,
+		}
+
 		relData = append(relData, map[string]interface{}{
 			"from_address": rel.FromAddress,
 			"to_address":   rel.ToAddress,
 			"value":        rel.Value,
 			"timestamp":    timestampStr,
-			"tx_hash":      rel.TxHash,
+			"tx_detail":    txDetail,
 		})
 	}
 
