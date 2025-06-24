@@ -46,17 +46,23 @@ func main() {
 	session := neo4jClient.GetDriver().NewSession(ctxWithTimeout, neo4j.SessionConfig{})
 	defer session.Close(ctxWithTimeout)
 
-	// Step 1: Convert relationships to direct wallet-to-wallet
-	log.Info("Converting relationships to direct wallet-to-wallet connections")
+	// Step 1: Convert relationships to direct wallet-to-wallet with tx_details
+	log.Info("Converting relationships to direct wallet-to-wallet connections with transaction details")
 	convertQuery := `
 		MATCH (from:Wallet)-[r:SENT_TO]->(to:Wallet)
-		WITH from, to, collect(r) as rels
+		// Collect all relationships between the same wallets and their metadata
+		WITH from, to, collect(r) as rels,
+			collect({hash: r.tx_hash, value: r.value, timestamp: r.timestamp}) as tx_details
+
+		// Create new relationship with aggregated data
 		MERGE (from)-[newRel:SENT_TO]->(to)
 		ON CREATE SET
 			newRel.total_value = toString(reduce(s = 0.0, rel IN rels | s + toFloat(rel.value))),
 			newRel.tx_count = size(rels),
 			newRel.first_tx = reduce(t = datetime(), rel IN rels | CASE WHEN rel.timestamp < t THEN rel.timestamp ELSE t END),
-			newRel.last_tx = reduce(t = datetime({year: 1970, month: 1, day: 1}), rel IN rels | CASE WHEN rel.timestamp > t THEN rel.timestamp ELSE t END)
+			newRel.last_tx = reduce(t = datetime({year: 1970, month: 1, day: 1}), rel IN rels | CASE WHEN rel.timestamp > t THEN rel.timestamp ELSE t END),
+			newRel.tx_details = tx_details
+
 		RETURN count(newRel) as created_relationships
 	`
 
@@ -72,7 +78,7 @@ func main() {
 	records := result.(neo4j.ResultWithContext)
 	if records.Next(ctxWithTimeout) {
 		record := records.Record()
-		log.Info("Created direct relationships", zap.Int64("count", record.Values[0].(int64)))
+		log.Info("Created direct relationships with transaction details", zap.Int64("count", record.Values[0].(int64)))
 	}
 
 	// Step 2: Delete Transaction nodes
@@ -98,5 +104,5 @@ func main() {
 		log.Info("Deleted Transaction nodes", zap.Int64("count", record.Values[0].(int64)))
 	}
 
-	log.Info("Cleanup complete! Database now only contains Wallet nodes with direct relationships.")
+	log.Info("Cleanup complete! Database now only contains Wallet nodes with direct relationships including transaction details.")
 }

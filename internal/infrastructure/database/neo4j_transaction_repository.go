@@ -44,11 +44,16 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 			r.total_value = $value,
 			r.tx_count = 1,
 			r.first_tx = $timestamp,
-			r.last_tx = $timestamp
+			r.last_tx = $timestamp,
+			r.tx_details = [{hash: $tx_hash, value: $value, timestamp: $timestamp}]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat($value)),
 			r.tx_count = r.tx_count + 1,
-			r.last_tx = $timestamp
+			r.last_tx = $timestamp,
+			r.tx_details = CASE
+				WHEN r.tx_details IS NULL THEN [{hash: $tx_hash, value: $value, timestamp: $timestamp}]
+				ELSE r.tx_details + {hash: $tx_hash, value: $value, timestamp: $timestamp}
+			END
 	`
 
 	params := map[string]interface{}{
@@ -56,6 +61,7 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 		"to_address":   rel.ToAddress,
 		"value":        rel.Value,
 		"timestamp":    rel.Timestamp,
+		"tx_hash":      rel.TxHash,
 	}
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -112,11 +118,16 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 			r.total_value = rel.value,
 			r.tx_count = 1,
 			r.first_tx = datetime(rel.timestamp),
-			r.last_tx = datetime(rel.timestamp)
+			r.last_tx = datetime(rel.timestamp),
+			r.tx_details = [{hash: rel.tx_hash, value: rel.value, timestamp: datetime(rel.timestamp)}]
 		ON MATCH SET
 			r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 			r.tx_count = r.tx_count + 1,
-			r.last_tx = datetime(rel.timestamp)
+			r.last_tx = datetime(rel.timestamp),
+			r.tx_details = CASE
+				WHEN r.tx_details IS NULL THEN [{hash: rel.tx_hash, value: rel.value, timestamp: datetime(rel.timestamp)}]
+				ELSE r.tx_details + {hash: rel.tx_hash, value: rel.value, timestamp: datetime(rel.timestamp)}
+			END
 	`
 
 	var relData []map[string]interface{}
@@ -129,6 +140,7 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 			"to_address":   rel.ToAddress,
 			"value":        rel.Value,
 			"timestamp":    timestampStr,
+			"tx_hash":      rel.TxHash,
 		})
 	}
 
