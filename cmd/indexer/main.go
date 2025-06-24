@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -198,20 +199,66 @@ func processMessages(
 	ticker := time.NewTicker(5 * time.Second) // Flush batch every 5 seconds
 	defer ticker.Stop()
 
+	// Create a worker pool for parallel batch processing
+	type batchJob struct {
+		transactions []*entity.Transaction
+	}
+	jobChan := make(chan batchJob, cfg.App.WorkerPoolSize)
+	var wg sync.WaitGroup
+
+	// Start worker pool
+	for i := 0; i < cfg.App.WorkerPoolSize; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			logger.Info("Starting batch processing worker", zap.Int("worker_id", workerID))
+
+			for job := range jobChan {
+				// Process the batch
+				if err := indexingService.ProcessTransactionBatch(ctx, job.transactions); err != nil {
+					logger.Error("Failed to process transaction batch",
+						zap.Error(err),
+						zap.Int("worker_id", workerID),
+						zap.Int("batch_size", len(job.transactions)))
+				} else {
+					logger.Info("Successfully processed batch",
+						zap.Int("worker_id", workerID),
+						zap.Int("batch_size", len(job.transactions)))
+				}
+			}
+		}(i)
+	}
+
+	// Process incoming messages
 	for {
 		select {
 		case <-ctx.Done():
 			// Process remaining batch
 			if len(batch) > 0 {
-				if err := indexingService.ProcessTransactionBatch(ctx, batch); err != nil {
-					logger.Error("Failed to process final batch", zap.Error(err))
-				}
+				// Clone the batch to avoid race conditions
+				txBatch := make([]*entity.Transaction, len(batch))
+				copy(txBatch, batch)
+				jobChan <- batchJob{transactions: txBatch}
 			}
+
+			// Close job channel and wait for workers to finish
+			close(jobChan)
+			wg.Wait()
 			return
 
 		case tx := <-msgChan:
 			if tx == nil {
-				// Channel closed
+				// Channel closed, clean up
+				if len(batch) > 0 {
+					// Clone the batch to avoid race conditions
+					txBatch := make([]*entity.Transaction, len(batch))
+					copy(txBatch, batch)
+					jobChan <- batchJob{transactions: txBatch}
+				}
+
+				// Close job channel and wait for workers to finish
+				close(jobChan)
+				wg.Wait()
 				return
 			}
 
@@ -219,19 +266,25 @@ func processMessages(
 
 			// Process batch if it's full
 			if len(batch) >= cfg.App.BatchSize {
-				if err := indexingService.ProcessTransactionBatch(ctx, batch); err != nil {
-					logger.Error("Failed to process transaction batch", zap.Error(err))
-				}
-				batch = batch[:0] // Reset batch
+				// Clone the batch to avoid race conditions
+				txBatch := make([]*entity.Transaction, len(batch))
+				copy(txBatch, batch)
+				jobChan <- batchJob{transactions: txBatch}
+
+				// Reset batch
+				batch = batch[:0]
 			}
 
 		case <-ticker.C:
 			// Flush batch periodically
 			if len(batch) > 0 {
-				if err := indexingService.ProcessTransactionBatch(ctx, batch); err != nil {
-					logger.Error("Failed to process transaction batch", zap.Error(err))
-				}
-				batch = batch[:0] // Reset batch
+				// Clone the batch to avoid race conditions
+				txBatch := make([]*entity.Transaction, len(batch))
+				copy(txBatch, batch)
+				jobChan <- batchJob{transactions: txBatch}
+
+				// Reset batch
+				batch = batch[:0]
 			}
 		}
 	}
