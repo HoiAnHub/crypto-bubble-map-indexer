@@ -59,24 +59,6 @@ var (
 	approvalEventSignature = crypto.Keccak256Hash([]byte("Approval(address,address,uint256)"))
 )
 
-// ContractInteractionType represents different types of contract interactions
-type ContractInteractionType string
-
-const (
-	InteractionTransfer          ContractInteractionType = "TRANSFER"
-	InteractionTransferFrom      ContractInteractionType = "TRANSFER_FROM"
-	InteractionApprove           ContractInteractionType = "APPROVE"
-	InteractionIncreaseAllowance ContractInteractionType = "INCREASE_ALLOWANCE"
-	InteractionDecreaseAllowance ContractInteractionType = "DECREASE_ALLOWANCE"
-	InteractionSwap              ContractInteractionType = "SWAP"
-	InteractionAddLiquidity      ContractInteractionType = "ADD_LIQUIDITY"
-	InteractionRemoveLiquidity   ContractInteractionType = "REMOVE_LIQUIDITY"
-	InteractionDeposit           ContractInteractionType = "DEPOSIT"
-	InteractionWithdraw          ContractInteractionType = "WITHDRAW"
-	InteractionMulticall         ContractInteractionType = "MULTICALL"
-	InteractionUnknown           ContractInteractionType = "UNKNOWN_CONTRACT_CALL"
-)
-
 // DecodeERC20Transfer decodes ERC20 and contract interactions from transaction data
 func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entity.Transaction) ([]*entity.ERC20Transfer, error) {
 	var transfers []*entity.ERC20Transfer
@@ -127,7 +109,7 @@ func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entit
 		s.logger.Info("Creating fallback contract interaction record",
 			zap.String("tx_hash", tx.Hash),
 			zap.String("contract", tx.To),
-			zap.String("interaction_type", string(InteractionUnknown)))
+			zap.String("interaction_type", string(entity.InteractionUnknownContract)))
 
 		fallback := s.createUnknownContractCallRecord(tx)
 		if fallback != nil {
@@ -139,7 +121,7 @@ func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entit
 }
 
 // decodeContractInteraction decodes various types of contract interactions
-func (s *ERC20DecoderService) decodeContractInteraction(tx *entity.Transaction) (ContractInteractionType, *entity.ERC20Transfer) {
+func (s *ERC20DecoderService) decodeContractInteraction(tx *entity.Transaction) (entity.ContractInteractionType, *entity.ERC20Transfer) {
 	data := tx.Data
 
 	// Remove 0x prefix if present
@@ -148,7 +130,7 @@ func (s *ERC20DecoderService) decodeContractInteraction(tx *entity.Transaction) 
 	}
 
 	if len(data) < 8 {
-		return InteractionUnknown, nil
+		return entity.InteractionUnknownContract, nil
 	}
 
 	methodSig := strings.ToLower(data[:8])
@@ -161,71 +143,71 @@ func (s *ERC20DecoderService) decodeContractInteraction(tx *entity.Transaction) 
 		transfer, err := s.decodeTransferMethod(tx, data)
 		if err != nil {
 			s.logger.Warn("Failed to decode transfer", zap.Error(err))
-			return InteractionTransfer, nil
+			return entity.InteractionTransfer, nil
 		}
-		return InteractionTransfer, transfer
+		return entity.InteractionTransfer, transfer
 
 	case transferFromSignature:
 		transfer, err := s.decodeTransferFromMethod(tx, data)
 		if err != nil {
 			s.logger.Warn("Failed to decode transferFrom", zap.Error(err))
-			return InteractionTransferFrom, nil
+			return entity.InteractionTransferFrom, nil
 		}
-		return InteractionTransferFrom, transfer
+		return entity.InteractionTransferFrom, transfer
 
 	case approveSignature:
 		transfer, err := s.decodeApprovalMethod(tx, data)
 		if err != nil {
 			s.logger.Warn("Failed to decode approve", zap.Error(err))
-			return InteractionApprove, nil
+			return entity.InteractionApprove, nil
 		}
-		return InteractionApprove, transfer
+		return entity.InteractionApprove, transfer
 
 	case increaseAllowanceSignature:
 		transfer, err := s.decodeAllowanceMethod(tx, data, "INCREASE")
 		if err != nil {
 			s.logger.Warn("Failed to decode increaseAllowance", zap.Error(err))
-			return InteractionIncreaseAllowance, nil
+			return entity.InteractionIncreaseAllowance, nil
 		}
-		return InteractionIncreaseAllowance, transfer
+		return entity.InteractionIncreaseAllowance, transfer
 
 	case decreaseAllowanceSignature:
 		transfer, err := s.decodeAllowanceMethod(tx, data, "DECREASE")
 		if err != nil {
 			s.logger.Warn("Failed to decode decreaseAllowance", zap.Error(err))
-			return InteractionDecreaseAllowance, nil
+			return entity.InteractionDecreaseAllowance, nil
 		}
-		return InteractionDecreaseAllowance, transfer
+		return entity.InteractionDecreaseAllowance, transfer
 
 	case swapExactETHForTokensSignature, swapExactTokensForETHSignature, swapExactTokensForTokensSignature:
 		transfer := s.createSwapRecord(tx, methodSig)
-		return InteractionSwap, transfer
+		return entity.InteractionSwap, transfer
 
 	case addLiquiditySignature:
 		transfer := s.createLiquidityRecord(tx, "ADD")
-		return InteractionAddLiquidity, transfer
+		return entity.InteractionAddLiquidity, transfer
 
 	case removeLiquiditySignature:
 		transfer := s.createLiquidityRecord(tx, "REMOVE")
-		return InteractionRemoveLiquidity, transfer
+		return entity.InteractionRemoveLiquidity, transfer
 
 	case depositSignature:
 		transfer := s.createDepositWithdrawRecord(tx, "DEPOSIT")
-		return InteractionDeposit, transfer
+		return entity.InteractionDeposit, transfer
 
 	case withdrawSignature:
 		transfer := s.createDepositWithdrawRecord(tx, "WITHDRAW")
-		return InteractionWithdraw, transfer
+		return entity.InteractionWithdraw, transfer
 
 	case multicallSignature:
 		transfer := s.createMulticallRecord(tx)
-		return InteractionMulticall, transfer
+		return entity.InteractionMulticall, transfer
 
 	default:
 		s.logger.Debug("Unknown method signature",
 			zap.String("tx_hash", tx.Hash),
 			zap.String("method_sig", methodSig))
-		return InteractionUnknown, nil
+		return entity.InteractionUnknownContract, nil
 	}
 }
 
@@ -550,11 +532,21 @@ func (s *ERC20DecoderService) createSwapRecord(tx *entity.Transaction, methodSig
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
+		InteractionType: entity.InteractionSwap,
+		MethodSignature: methodSig,
+		Success:         true,
 	}
 }
 
 // createLiquidityRecord creates a record for liquidity operations
 func (s *ERC20DecoderService) createLiquidityRecord(tx *entity.Transaction, operation string) *entity.ERC20Transfer {
+	var interactionType entity.ContractInteractionType
+	if operation == "ADD" {
+		interactionType = entity.InteractionAddLiquidity
+	} else {
+		interactionType = entity.InteractionRemoveLiquidity
+	}
+
 	return &entity.ERC20Transfer{
 		ContractAddress: tx.To,
 		From:            tx.From,
@@ -564,11 +556,24 @@ func (s *ERC20DecoderService) createLiquidityRecord(tx *entity.Transaction, oper
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
+		InteractionType: interactionType,
+		MethodSignature: addLiquiditySignature, // Set appropriate signature
+		Success:         true,
 	}
 }
 
 // createDepositWithdrawRecord creates a record for deposit/withdraw operations
 func (s *ERC20DecoderService) createDepositWithdrawRecord(tx *entity.Transaction, operation string) *entity.ERC20Transfer {
+	var interactionType entity.ContractInteractionType
+	var methodSig string
+	if operation == "DEPOSIT" {
+		interactionType = entity.InteractionDeposit
+		methodSig = depositSignature
+	} else {
+		interactionType = entity.InteractionWithdraw
+		methodSig = withdrawSignature
+	}
+
 	return &entity.ERC20Transfer{
 		ContractAddress: tx.To,
 		From:            tx.From,
@@ -578,6 +583,9 @@ func (s *ERC20DecoderService) createDepositWithdrawRecord(tx *entity.Transaction
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
+		InteractionType: interactionType,
+		MethodSignature: methodSig,
+		Success:         true,
 	}
 }
 
@@ -592,6 +600,9 @@ func (s *ERC20DecoderService) createMulticallRecord(tx *entity.Transaction) *ent
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
+		InteractionType: entity.InteractionMulticall,
+		MethodSignature: multicallSignature,
+		Success:         true,
 	}
 }
 
