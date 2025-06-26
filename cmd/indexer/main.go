@@ -12,8 +12,6 @@ import (
 
 	app_service "crypto-bubble-map-indexer/internal/application/service"
 	"crypto-bubble-map-indexer/internal/domain/entity"
-	"crypto-bubble-map-indexer/internal/domain/repository"
-	"crypto-bubble-map-indexer/internal/domain/service"
 	domain_service "crypto-bubble-map-indexer/internal/domain/service"
 	"crypto-bubble-map-indexer/internal/infrastructure/blockchain"
 	"crypto-bubble-map-indexer/internal/infrastructure/config"
@@ -75,25 +73,7 @@ func main() {
 
 		// Application providers
 		fx.Provide(
-			func(
-				walletRepo repository.WalletRepository,
-				transactionRepo repository.TransactionRepository,
-				erc20Repo repository.ERC20Repository,
-				erc20Decoder service.ERC20DecoderService,
-				nodeClassifier *domain_service.NodeClassifierService,
-				classificationRepo repository.NodeClassificationRepository,
-				logger *logger.Logger,
-			) domain_service.IndexingService {
-				return app_service.NewIndexingApplicationService(
-					walletRepo,
-					transactionRepo,
-					erc20Repo,
-					erc20Decoder,
-					nodeClassifier,
-					classificationRepo,
-					logger,
-				)
-			},
+			app_service.NewIndexingApplicationService,
 			app_service.NewNodeClassificationAppService,
 		),
 

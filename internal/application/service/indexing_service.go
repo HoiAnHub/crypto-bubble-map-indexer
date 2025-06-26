@@ -15,13 +15,11 @@ import (
 
 // IndexingApplicationService implements IndexingService interface
 type IndexingApplicationService struct {
-	walletRepo         repository.WalletRepository
-	transactionRepo    repository.TransactionRepository
-	erc20Repo          repository.ERC20Repository
-	erc20Decoder       service.ERC20DecoderService
-	nodeClassifier     *service.NodeClassifierService
-	classificationRepo repository.NodeClassificationRepository
-	logger             *logger.Logger
+	walletRepo      repository.WalletRepository
+	transactionRepo repository.TransactionRepository
+	erc20Repo       repository.ERC20Repository
+	erc20Decoder    service.ERC20DecoderService
+	logger          *logger.Logger
 }
 
 // NewIndexingApplicationService creates a new indexing application service
@@ -30,18 +28,14 @@ func NewIndexingApplicationService(
 	transactionRepo repository.TransactionRepository,
 	erc20Repo repository.ERC20Repository,
 	erc20Decoder service.ERC20DecoderService,
-	nodeClassifier *service.NodeClassifierService,
-	classificationRepo repository.NodeClassificationRepository,
 	logger *logger.Logger,
 ) service.IndexingService {
 	return &IndexingApplicationService{
-		walletRepo:         walletRepo,
-		transactionRepo:    transactionRepo,
-		erc20Repo:          erc20Repo,
-		erc20Decoder:       erc20Decoder,
-		nodeClassifier:     nodeClassifier,
-		classificationRepo: classificationRepo,
-		logger:             logger.WithComponent("indexing-service"),
+		walletRepo:      walletRepo,
+		transactionRepo: transactionRepo,
+		erc20Repo:       erc20Repo,
+		erc20Decoder:    erc20Decoder,
+		logger:          logger.WithComponent("indexing-service"),
 	}
 }
 
@@ -259,13 +253,6 @@ func (s *IndexingApplicationService) createOrUpdateWallets(ctx context.Context, 
 		return fmt.Errorf("failed to create/update sender wallet: %w", err)
 	}
 
-	// Classify sender wallet
-	if err := s.classifyWallet(ctx, tx.From); err != nil {
-		s.logger.Warn("Failed to classify sender wallet",
-			zap.String("address", tx.From),
-			zap.Error(err))
-	}
-
 	// Create/update receiver wallet
 	receiverWallet := &entity.Wallet{
 		Address:           tx.To,
@@ -279,13 +266,6 @@ func (s *IndexingApplicationService) createOrUpdateWallets(ctx context.Context, 
 
 	if err := s.walletRepo.CreateOrUpdateWallet(ctx, receiverWallet); err != nil {
 		return fmt.Errorf("failed to create/update receiver wallet: %w", err)
-	}
-
-	// Classify receiver wallet
-	if err := s.classifyWallet(ctx, tx.To); err != nil {
-		s.logger.Warn("Failed to classify receiver wallet",
-			zap.String("address", tx.To),
-			zap.Error(err))
 	}
 
 	return nil
@@ -337,13 +317,6 @@ func (s *IndexingApplicationService) batchCreateOrUpdateWallets(ctx context.Cont
 	for _, wallet := range walletMap {
 		if err := s.walletRepo.CreateOrUpdateWallet(ctx, wallet); err != nil {
 			return fmt.Errorf("failed to create/update wallet %s: %w", wallet.Address, err)
-		}
-
-		// Classify each wallet after creation/update
-		if err := s.classifyWallet(ctx, wallet.Address); err != nil {
-			s.logger.Warn("Failed to classify wallet in batch",
-				zap.String("address", wallet.Address),
-				zap.Error(err))
 		}
 	}
 	return nil
@@ -544,39 +517,4 @@ func (s *IndexingApplicationService) generateContractSymbol(contractType string)
 	default:
 		return "UNK"
 	}
-}
-
-// classifyWallet classifies a wallet address using the node classification service
-func (s *IndexingApplicationService) classifyWallet(ctx context.Context, address string) error {
-	if s.nodeClassifier == nil || s.classificationRepo == nil {
-		return nil // Skip classification if services not available
-	}
-
-	// Get wallet stats for better classification
-	stats, err := s.walletRepo.GetWalletStats(ctx, address)
-	if err != nil {
-		s.logger.Debug("Could not get wallet stats for classification",
-			zap.String("address", address),
-			zap.Error(err))
-		stats = nil // Continue without stats
-	}
-
-	// Perform classification
-	classification, err := s.nodeClassifier.ClassifyNode(ctx, address, stats, []string{})
-	if err != nil {
-		return fmt.Errorf("failed to classify node %s: %w", address, err)
-	}
-
-	// Save classification
-	if err := s.classificationRepo.CreateOrUpdateClassification(ctx, classification); err != nil {
-		return fmt.Errorf("failed to save classification for %s: %w", address, err)
-	}
-
-	s.logger.Debug("Successfully classified wallet",
-		zap.String("address", address),
-		zap.String("node_type", string(classification.PrimaryType)),
-		zap.String("risk_level", string(classification.RiskLevel)),
-		zap.Float64("confidence", classification.ConfidenceScore))
-
-	return nil
 }
