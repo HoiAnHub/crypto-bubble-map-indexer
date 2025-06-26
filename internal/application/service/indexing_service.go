@@ -17,6 +17,8 @@ import (
 type IndexingApplicationService struct {
 	walletRepo      repository.WalletRepository
 	transactionRepo repository.TransactionRepository
+	erc20Repo       repository.ERC20Repository
+	erc20Decoder    service.ERC20DecoderService
 	logger          *logger.Logger
 }
 
@@ -24,11 +26,15 @@ type IndexingApplicationService struct {
 func NewIndexingApplicationService(
 	walletRepo repository.WalletRepository,
 	transactionRepo repository.TransactionRepository,
+	erc20Repo repository.ERC20Repository,
+	erc20Decoder service.ERC20DecoderService,
 	logger *logger.Logger,
 ) service.IndexingService {
 	return &IndexingApplicationService{
 		walletRepo:      walletRepo,
 		transactionRepo: transactionRepo,
+		erc20Repo:       erc20Repo,
+		erc20Decoder:    erc20Decoder,
 		logger:          logger.WithComponent("indexing-service"),
 	}
 }
@@ -54,6 +60,14 @@ func (s *IndexingApplicationService) ProcessTransaction(ctx context.Context, tx 
 
 	if err := s.transactionRepo.CreateTransactionRelationship(ctx, rel); err != nil {
 		return fmt.Errorf("failed to create transaction relationship: %w", err)
+	}
+
+	// Process ERC20 transfers if applicable
+	if err := s.processERC20Transfers(ctx, tx); err != nil {
+		s.logger.Error("Failed to process ERC20 transfers",
+			zap.String("tx_hash", tx.Hash),
+			zap.Error(err))
+		// Don't fail the entire transaction processing for ERC20 errors
 	}
 
 	s.logger.Info("Successfully processed transaction", zap.String("hash", tx.Hash))
@@ -196,5 +210,76 @@ func (s *IndexingApplicationService) batchCreateOrUpdateWallets(ctx context.Cont
 			return fmt.Errorf("failed to create/update wallet %s: %w", wallet.Address, err)
 		}
 	}
+	return nil
+}
+
+// GetERC20TransfersForWallet retrieves ERC20 transfers for a wallet
+func (s *IndexingApplicationService) GetERC20TransfersForWallet(ctx context.Context, address string, limit int) ([]*entity.ERC20Transfer, error) {
+	return s.erc20Repo.GetERC20TransfersForWallet(ctx, address, limit)
+}
+
+// GetERC20TransfersBetweenWallets retrieves ERC20 transfers between two wallets
+func (s *IndexingApplicationService) GetERC20TransfersBetweenWallets(ctx context.Context, fromAddress, toAddress string, limit int) ([]*entity.ERC20Transfer, error) {
+	return s.erc20Repo.GetERC20TransfersBetweenWallets(ctx, fromAddress, toAddress, limit)
+}
+
+// processERC20Transfers processes ERC20 transfers from a transaction
+func (s *IndexingApplicationService) processERC20Transfers(ctx context.Context, tx *entity.Transaction) error {
+	// Decode ERC20 transfers from transaction data
+	transfers, err := s.erc20Decoder.DecodeERC20Transfer(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("failed to decode ERC20 transfers: %w", err)
+	}
+
+	if len(transfers) == 0 {
+		return nil // No ERC20 transfers found
+	}
+
+	s.logger.Info("Found ERC20 transfers",
+		zap.String("tx_hash", tx.Hash),
+		zap.Int("count", len(transfers)))
+
+	// Process each ERC20 transfer
+	for _, transfer := range transfers {
+		// Create ERC20 contract if needed
+		contract := &entity.ERC20Contract{
+			Address:   transfer.ContractAddress,
+			Name:      "Unknown Token",
+			Symbol:    "UNK",
+			Decimals:  18,
+			FirstSeen: transfer.Timestamp,
+			LastSeen:  transfer.Timestamp,
+			TotalTxs:  1,
+			Network:   transfer.Network,
+		}
+
+		if err := s.erc20Repo.CreateOrUpdateERC20Contract(ctx, contract); err != nil {
+			s.logger.Error("Failed to create/update ERC20 contract",
+				zap.String("contract", transfer.ContractAddress),
+				zap.Error(err))
+			// Continue processing other transfers
+		}
+
+		// Create transfer relationship
+		transferRel := &entity.ERC20TransferRelationship{
+			FromAddress:     transfer.From,
+			ToAddress:       transfer.To,
+			ContractAddress: transfer.ContractAddress,
+			Value:           transfer.Value,
+			TxHash:          transfer.TxHash,
+			Timestamp:       transfer.Timestamp,
+			Network:         transfer.Network,
+		}
+
+		if err := s.erc20Repo.CreateERC20TransferRelationship(ctx, transferRel); err != nil {
+			s.logger.Error("Failed to create ERC20 transfer relationship",
+				zap.String("from", transfer.From),
+				zap.String("to", transfer.To),
+				zap.String("contract", transfer.ContractAddress),
+				zap.Error(err))
+			// Continue processing other transfers
+		}
+	}
+
 	return nil
 }

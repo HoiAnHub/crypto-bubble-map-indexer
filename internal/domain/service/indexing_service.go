@@ -21,4 +21,10 @@ type IndexingService interface {
 
 	// GetTransactionPath finds transaction path between wallets
 	GetTransactionPath(ctx context.Context, fromAddress, toAddress string, maxHops int) ([]*entity.TransactionNode, error)
+
+	// GetERC20TransfersForWallet retrieves ERC20 transfers for a wallet
+	GetERC20TransfersForWallet(ctx context.Context, address string, limit int) ([]*entity.ERC20Transfer, error)
+
+	// GetERC20TransfersBetweenWallets retrieves ERC20 transfers between two wallets
+	GetERC20TransfersBetweenWallets(ctx context.Context, fromAddress, toAddress string, limit int) ([]*entity.ERC20Transfer, error)
 }

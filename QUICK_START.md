@@ -39,6 +39,9 @@ chmod +x scripts/vps-deploy.sh
 
 # Run the deployment script
 ./scripts/vps-deploy.sh
+
+# Stop the services
+make down
 ```
 
 ## Deployment Result

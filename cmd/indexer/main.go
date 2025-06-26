@@ -13,6 +13,7 @@ import (
 	app_service "crypto-bubble-map-indexer/internal/application/service"
 	"crypto-bubble-map-indexer/internal/domain/entity"
 	domain_service "crypto-bubble-map-indexer/internal/domain/service"
+	"crypto-bubble-map-indexer/internal/infrastructure/blockchain"
 	"crypto-bubble-map-indexer/internal/infrastructure/config"
 	"crypto-bubble-map-indexer/internal/infrastructure/database"
 	"crypto-bubble-map-indexer/internal/infrastructure/logger"
@@ -52,6 +53,8 @@ func main() {
 			database.NewNeo4JClient,
 			database.NewNeo4JWalletRepository,
 			database.NewNeo4JTransactionRepository,
+			database.NewNeo4JERC20Repository,
+			blockchain.NewERC20DecoderService,
 			messaging.NewNATSConsumer,
 		),
 
