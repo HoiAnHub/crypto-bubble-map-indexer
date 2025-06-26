@@ -113,70 +113,54 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 		}
 		relationships = append(relationships, rel)
 
-		// Process ERC20 transfers for this transaction with detailed logging
-		s.logger.Debug("Attempting ERC20 decode for transaction",
-			zap.String("tx_hash", tx.Hash),
-			zap.String("from", tx.From),
-			zap.String("to", tx.To),
-			zap.String("value", tx.Value),
-			zap.String("data", tx.Data),
-			zap.Bool("has_data", tx.Data != "" && tx.Data != "0x"),
-			zap.Bool("to_contract", len(tx.To) == 42))
-
-		erc20Transfers, err := s.erc20Decoder.DecodeERC20Transfer(ctx, tx)
+		// Process ERC20 transfers for this transaction
+		transfers, err := s.erc20Decoder.DecodeERC20Transfer(ctx, tx)
 		if err != nil {
-			s.logger.Debug("Failed to decode ERC20 transfers",
+			s.logger.Warn("Failed to decode ERC20 transfers",
 				zap.String("tx_hash", tx.Hash),
-				zap.String("from", tx.From),
-				zap.String("to", tx.To),
-				zap.String("data", tx.Data),
 				zap.Error(err))
-			// Continue to process regular transaction even if ERC20 decode fails
-		} else if len(erc20Transfers) == 0 {
-			s.logger.Debug("No ERC20 transfers decoded",
-				zap.String("tx_hash", tx.Hash),
-				zap.String("from", tx.From),
-				zap.String("to", tx.To),
-				zap.String("data", tx.Data))
-			// Continue to process regular transaction even if no ERC20 transfers found
-		} else {
-			// Process each ERC20 transfer
-			for _, transfer := range erc20Transfers {
-				s.logger.Info("Found ERC20 transfer in batch",
+		} else if len(transfers) > 0 {
+			for _, transfer := range transfers {
+				// Create relationship for this transfer/interaction
+				relationship := &entity.ERC20TransferRelationship{
+					FromAddress:      transfer.From,
+					ToAddress:        transfer.To,
+					ContractAddress:  transfer.ContractAddress,
+					Value:            transfer.Value,
+					TxHash:           transfer.TxHash,
+					Timestamp:        transfer.Timestamp,
+					Network:          transfer.Network,
+					InteractionType:  transfer.InteractionType,
+					TotalValue:       transfer.Value,
+					TransactionCount: 1,
+					FirstInteraction: transfer.Timestamp,
+					LastInteraction:  transfer.Timestamp,
+				}
+				erc20Relationships = append(erc20Relationships, relationship)
+
+				// Track unique contracts for creation
+				if _, exists := contractMap[transfer.ContractAddress]; !exists && transfer.ContractAddress != "ETH" {
+					contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
+						Address:      transfer.ContractAddress,
+						Name:         "Unknown Contract",
+						Symbol:       "UNK",
+						Decimals:     18,
+						FirstSeen:    transfer.Timestamp,
+						LastSeen:     transfer.Timestamp,
+						TotalTxs:     1,
+						Network:      transfer.Network,
+						ContractType: s.determineContractType(transfer.InteractionType),
+						IsVerified:   false,
+					}
+				}
+
+				s.logger.Debug("Processed contract interaction",
 					zap.String("tx_hash", tx.Hash),
+					zap.String("interaction_type", string(transfer.InteractionType)),
 					zap.String("from", transfer.From),
 					zap.String("to", transfer.To),
 					zap.String("contract", transfer.ContractAddress),
 					zap.String("value", transfer.Value))
-
-				// Prepare ERC20 contract
-				if _, exists := contractMap[transfer.ContractAddress]; !exists {
-					contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
-						Address:   transfer.ContractAddress,
-						Name:      "Unknown Token",
-						Symbol:    "UNK",
-						Decimals:  18,
-						FirstSeen: transfer.Timestamp,
-						LastSeen:  transfer.Timestamp,
-						TotalTxs:  1,
-						Network:   transfer.Network,
-					}
-				} else {
-					contractMap[transfer.ContractAddress].LastSeen = transfer.Timestamp
-					contractMap[transfer.ContractAddress].TotalTxs++
-				}
-
-				// Prepare ERC20 transfer relationship
-				transferRel := &entity.ERC20TransferRelationship{
-					FromAddress:     transfer.From,
-					ToAddress:       transfer.To,
-					ContractAddress: transfer.ContractAddress,
-					Value:           transfer.Value,
-					TxHash:          transfer.TxHash,
-					Timestamp:       transfer.Timestamp,
-					Network:         transfer.Network,
-				}
-				erc20Relationships = append(erc20Relationships, transferRel)
 			}
 		}
 	}
@@ -418,4 +402,25 @@ func (s *IndexingApplicationService) processERC20Transfers(ctx context.Context, 
 	}
 
 	return nil
+}
+
+// determineContractType determines the contract type based on interaction type
+func (s *IndexingApplicationService) determineContractType(interactionType entity.ContractInteractionType) string {
+	switch interactionType {
+	case entity.InteractionSwap:
+		return "DEX"
+	case entity.InteractionAddLiquidity, entity.InteractionRemoveLiquidity:
+		return "LIQUIDITY_POOL"
+	case entity.InteractionDeposit, entity.InteractionWithdraw:
+		return "DEFI_PROTOCOL"
+	case entity.InteractionMulticall:
+		return "MULTICALL"
+	case entity.InteractionTransfer, entity.InteractionTransferFrom,
+		entity.InteractionApprove, entity.InteractionIncreaseAllowance, entity.InteractionDecreaseAllowance:
+		return "ERC20"
+	case entity.InteractionETHTransfer:
+		return "ETH"
+	default:
+		return "UNKNOWN"
+	}
 }

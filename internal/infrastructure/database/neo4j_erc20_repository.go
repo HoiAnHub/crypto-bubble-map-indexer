@@ -118,57 +118,208 @@ func (r *Neo4JERC20Repository) CreateERC20TransferRelationship(ctx context.Conte
 	return nil
 }
 
-// BatchCreateERC20TransferRelationships creates multiple transfer relationships in batch
-func (r *Neo4JERC20Repository) BatchCreateERC20TransferRelationships(ctx context.Context, transfers []*entity.ERC20TransferRelationship) error {
-	if len(transfers) == 0 {
-		return nil
-	}
-
+// BatchCreateERC20TransferRelationships creates multiple ERC20 transfer relationships in a batch
+func (r *Neo4JERC20Repository) BatchCreateERC20TransferRelationships(ctx context.Context, relationships []*entity.ERC20TransferRelationship) error {
 	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
 	defer session.Close(ctx)
 
-	query := `
-		UNWIND $transfers as transfer
-		MERGE (from:Wallet {address: transfer.from_address})
-		MERGE (to:Wallet {address: transfer.to_address})
-		MERGE (contract:ERC20Contract {address: transfer.contract_address})
-		CREATE (from)-[:ERC20_TRANSFER {
-			value: transfer.value,
-			tx_hash: transfer.tx_hash,
-			timestamp: transfer.timestamp,
-			network: transfer.network,
-			contract_address: transfer.contract_address
-		}]->(to)
-		CREATE (from)-[:INTERACTED_WITH]->(contract)
-		CREATE (to)-[:INTERACTED_WITH]->(contract)
-	`
+	// Group relationships by type for optimal processing
+	relationshipGroups := make(map[string][]*entity.ERC20TransferRelationship)
+	for _, rel := range relationships {
+		relType := rel.InteractionType.GetRelationshipType()
+		relationshipGroups[relType] = append(relationshipGroups[relType], rel)
+	}
 
-	var transferMaps []map[string]interface{}
-	for _, transfer := range transfers {
-		transferMaps = append(transferMaps, map[string]interface{}{
-			"from_address":     transfer.FromAddress,
-			"to_address":       transfer.ToAddress,
-			"contract_address": transfer.ContractAddress,
-			"value":            transfer.Value,
-			"tx_hash":          transfer.TxHash,
-			"timestamp":        transfer.Timestamp.Format("2006-01-02T15:04:05.000Z"),
-			"network":          transfer.Network,
+	r.logger.Info("Creating ERC20 relationships in batches",
+		zap.Int("total_relationships", len(relationships)),
+		zap.Int("relationship_types", len(relationshipGroups)))
+
+	// Process each relationship type separately
+	for relType, rels := range relationshipGroups {
+		if err := r.batchCreateRelationshipsByType(ctx, session, relType, rels); err != nil {
+			return fmt.Errorf("failed to create %s relationships: %w", relType, err)
+		}
+		r.logger.Debug("Created relationships by type",
+			zap.String("relationship_type", relType),
+			zap.Int("count", len(rels)))
+	}
+
+	return nil
+}
+
+// batchCreateRelationshipsByType creates relationships of a specific type
+func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Context, session neo4j.SessionWithContext, relType string, relationships []*entity.ERC20TransferRelationship) error {
+	// Different queries for different relationship types
+	var query string
+
+	switch relType {
+	case "ERC20_TRANSFER":
+		// For transfers, create relationship between wallets
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (to:Wallet {address: rel.to_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:ERC20_TRANSFER {contract_address: rel.contract_address}]->(to)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.contract_address = rel.contract_address,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	case "ERC20_APPROVAL":
+		// For approvals, create relationship from wallet to contract/spender
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (to:Wallet {address: rel.to_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:ERC20_APPROVAL {contract_address: rel.contract_address, spender: rel.to_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.spender = rel.to_address,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = rel.value,
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	case "DEX_SWAP":
+		// For swaps, create relationship from wallet to DEX contract
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:DEX_SWAP {contract_address: rel.contract_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	case "LIQUIDITY_OPERATION":
+		// For liquidity operations
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:LIQUIDITY_OPERATION {contract_address: rel.contract_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	case "DEFI_OPERATION":
+		// For DeFi operations (deposit/withdraw)
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:DEFI_OPERATION {contract_address: rel.contract_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	case "ETH_TRANSFER":
+		// For ETH transfers, create simple relationship
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (to:Wallet {address: rel.to_address})
+			MERGE (from)-[r:ETH_TRANSFER]->(to)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+
+	default:
+		// For unknown contract interactions
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:CONTRACT_INTERACTION {contract_address: rel.contract_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp)
+		`
+	}
+
+	// Prepare relationship data
+	var relData []map[string]interface{}
+	for _, rel := range relationships {
+		timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
+
+		relData = append(relData, map[string]interface{}{
+			"from_address":     rel.FromAddress,
+			"to_address":       rel.ToAddress,
+			"contract_address": rel.ContractAddress,
+			"value":            rel.Value,
+			"timestamp":        timestampStr,
+			"interaction_type": string(rel.InteractionType),
+			"network":          rel.Network,
 		})
 	}
 
-	parameters := map[string]interface{}{
-		"transfers": transferMaps,
-	}
-
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		return tx.Run(ctx, query, parameters)
+		return tx.Run(ctx, query, map[string]interface{}{"relationships": relData})
 	})
 
 	if err != nil {
-		r.logger.Error("Failed to batch create ERC20 transfer relationships",
-			zap.Int("count", len(transfers)),
-			zap.Error(err))
-		return fmt.Errorf("failed to batch create ERC20 transfer relationships: %w", err)
+		return fmt.Errorf("failed to execute batch create for %s: %w", relType, err)
 	}
 
 	return nil

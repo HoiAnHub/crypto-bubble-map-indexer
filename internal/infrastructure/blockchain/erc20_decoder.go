@@ -16,26 +16,70 @@ import (
 	"go.uber.org/zap"
 )
 
-// ERC20DecoderService implements the ERC20 decoder service
+// ERC20DecoderService implements enhanced ERC20 and contract decoder service
 type ERC20DecoderService struct {
 	logger *logger.Logger
 }
 
-// NewERC20DecoderService creates a new ERC20 decoder service
+// NewERC20DecoderService creates a new enhanced ERC20 decoder service
 func NewERC20DecoderService(logger *logger.Logger) service.ERC20DecoderService {
 	return &ERC20DecoderService{
 		logger: logger.WithComponent("erc20-decoder"),
 	}
 }
 
-// ERC20 Transfer event signature: Transfer(address,address,uint256)
-var transferEventSignature = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
+// Common ERC20 function signatures
+var (
+	// ERC20 Standard Functions
+	transferSignature     = "a9059cbb" // transfer(address,uint256)
+	transferFromSignature = "23b872dd" // transferFrom(address,address,uint256)
+	approveSignature      = "095ea7b3" // approve(address,uint256)
 
-// DecodeERC20Transfer decodes ERC20 Transfer events from transaction data
+	// Extended ERC20 Functions
+	increaseAllowanceSignature = "39509351" // increaseAllowance(address,uint256)
+	decreaseAllowanceSignature = "a457c2d7" // decreaseAllowance(address,uint256)
+
+	// Common DEX/DeFi Functions
+	swapExactETHForTokensSignature    = "7ff36ab5" // Uniswap V2
+	swapExactTokensForETHSignature    = "18cbafe5" // Uniswap V2
+	swapExactTokensForTokensSignature = "38ed1739" // Uniswap V2
+	addLiquiditySignature             = "e8e33700" // Uniswap V2
+	removeLiquiditySignature          = "baa2abde" // Uniswap V2
+
+	// Common patterns
+	multicallSignature    = "ac9650d8" // Multicall
+	safeTransferSignature = "42842e0e" // SafeTransfer
+	depositSignature      = "d0e30db0" // deposit()
+	withdrawSignature     = "2e1a7d4d" // withdraw(uint256)
+
+	// Events
+	transferEventSignature = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
+	approvalEventSignature = crypto.Keccak256Hash([]byte("Approval(address,address,uint256)"))
+)
+
+// ContractInteractionType represents different types of contract interactions
+type ContractInteractionType string
+
+const (
+	InteractionTransfer          ContractInteractionType = "TRANSFER"
+	InteractionTransferFrom      ContractInteractionType = "TRANSFER_FROM"
+	InteractionApprove           ContractInteractionType = "APPROVE"
+	InteractionIncreaseAllowance ContractInteractionType = "INCREASE_ALLOWANCE"
+	InteractionDecreaseAllowance ContractInteractionType = "DECREASE_ALLOWANCE"
+	InteractionSwap              ContractInteractionType = "SWAP"
+	InteractionAddLiquidity      ContractInteractionType = "ADD_LIQUIDITY"
+	InteractionRemoveLiquidity   ContractInteractionType = "REMOVE_LIQUIDITY"
+	InteractionDeposit           ContractInteractionType = "DEPOSIT"
+	InteractionWithdraw          ContractInteractionType = "WITHDRAW"
+	InteractionMulticall         ContractInteractionType = "MULTICALL"
+	InteractionUnknown           ContractInteractionType = "UNKNOWN_CONTRACT_CALL"
+)
+
+// DecodeERC20Transfer decodes ERC20 and contract interactions from transaction data
 func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entity.Transaction) ([]*entity.ERC20Transfer, error) {
 	var transfers []*entity.ERC20Transfer
 
-	s.logger.Info("Attempting to decode ERC20 transfer",
+	s.logger.Debug("Attempting to decode contract interaction",
 		zap.String("tx_hash", tx.Hash),
 		zap.String("to", tx.To),
 		zap.String("from", tx.From),
@@ -45,47 +89,142 @@ func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entit
 
 	// Check if transaction has data (contract interaction)
 	if tx.Data == "" || tx.Data == "0x" {
-		s.logger.Debug("No transaction data found, skipping ERC20 decode",
+		s.logger.Debug("No transaction data found, creating ETH transfer record",
 			zap.String("tx_hash", tx.Hash))
+		// For ETH transfers, still create a record for tracking
+		if tx.Value != "0" {
+			transfer := s.createETHTransferRecord(tx)
+			if transfer != nil {
+				transfers = append(transfers, transfer)
+			}
+		}
 		return transfers, nil
 	}
 
-	// Check if transaction is to a contract (non-zero address)
+	// Check if transaction is to a contract
 	if tx.To == "" || tx.To == "0x0000000000000000000000000000000000000000" {
-		s.logger.Debug("Transaction to zero address, skipping ERC20 decode",
+		s.logger.Debug("Transaction to zero address (contract creation), skipping",
 			zap.String("tx_hash", tx.Hash))
 		return transfers, nil
 	}
 
-	// Try to decode as direct transfer call
-	transfer, err := s.decodeDirectTransfer(tx)
-	if err != nil {
-		s.logger.Debug("Failed to decode as direct transfer",
-			zap.String("tx_hash", tx.Hash),
-			zap.String("data", tx.Data),
-			zap.Error(err))
+	// Detect and decode contract interaction
+	interactionType, decoded := s.decodeContractInteraction(tx)
 
-		// Try alternative decoding methods
-		transfer, err = s.decodeAlternativeFormats(tx)
-		if err != nil {
-			s.logger.Debug("Failed all decoding attempts",
-				zap.String("tx_hash", tx.Hash),
-				zap.Error(err))
-			return transfers, nil
+	if decoded != nil {
+		s.logger.Info("Successfully decoded contract interaction",
+			zap.String("tx_hash", tx.Hash),
+			zap.String("interaction_type", string(interactionType)),
+			zap.String("contract", decoded.ContractAddress),
+			zap.String("from", decoded.From),
+			zap.String("to", decoded.To),
+			zap.String("value", decoded.Value))
+		transfers = append(transfers, decoded)
+	} else {
+		// Create fallback unknown contract interaction record
+		s.logger.Info("Creating fallback contract interaction record",
+			zap.String("tx_hash", tx.Hash),
+			zap.String("contract", tx.To),
+			zap.String("interaction_type", string(InteractionUnknown)))
+
+		fallback := s.createUnknownContractCallRecord(tx)
+		if fallback != nil {
+			transfers = append(transfers, fallback)
 		}
 	}
 
-	if transfer != nil {
-		s.logger.Info("Successfully decoded ERC20 transfer",
-			zap.String("tx_hash", tx.Hash),
-			zap.String("contract", transfer.ContractAddress),
-			zap.String("from", transfer.From),
-			zap.String("to", transfer.To),
-			zap.String("value", transfer.Value))
-		transfers = append(transfers, transfer)
+	return transfers, nil
+}
+
+// decodeContractInteraction decodes various types of contract interactions
+func (s *ERC20DecoderService) decodeContractInteraction(tx *entity.Transaction) (ContractInteractionType, *entity.ERC20Transfer) {
+	data := tx.Data
+
+	// Remove 0x prefix if present
+	if strings.HasPrefix(data, "0x") {
+		data = data[2:]
 	}
 
-	return transfers, nil
+	if len(data) < 8 {
+		return InteractionUnknown, nil
+	}
+
+	methodSig := strings.ToLower(data[:8])
+	s.logger.Debug("Analyzing method signature",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("method_sig", methodSig))
+
+	switch methodSig {
+	case transferSignature:
+		transfer, err := s.decodeTransferMethod(tx, data)
+		if err != nil {
+			s.logger.Warn("Failed to decode transfer", zap.Error(err))
+			return InteractionTransfer, nil
+		}
+		return InteractionTransfer, transfer
+
+	case transferFromSignature:
+		transfer, err := s.decodeTransferFromMethod(tx, data)
+		if err != nil {
+			s.logger.Warn("Failed to decode transferFrom", zap.Error(err))
+			return InteractionTransferFrom, nil
+		}
+		return InteractionTransferFrom, transfer
+
+	case approveSignature:
+		transfer, err := s.decodeApprovalMethod(tx, data)
+		if err != nil {
+			s.logger.Warn("Failed to decode approve", zap.Error(err))
+			return InteractionApprove, nil
+		}
+		return InteractionApprove, transfer
+
+	case increaseAllowanceSignature:
+		transfer, err := s.decodeAllowanceMethod(tx, data, "INCREASE")
+		if err != nil {
+			s.logger.Warn("Failed to decode increaseAllowance", zap.Error(err))
+			return InteractionIncreaseAllowance, nil
+		}
+		return InteractionIncreaseAllowance, transfer
+
+	case decreaseAllowanceSignature:
+		transfer, err := s.decodeAllowanceMethod(tx, data, "DECREASE")
+		if err != nil {
+			s.logger.Warn("Failed to decode decreaseAllowance", zap.Error(err))
+			return InteractionDecreaseAllowance, nil
+		}
+		return InteractionDecreaseAllowance, transfer
+
+	case swapExactETHForTokensSignature, swapExactTokensForETHSignature, swapExactTokensForTokensSignature:
+		transfer := s.createSwapRecord(tx, methodSig)
+		return InteractionSwap, transfer
+
+	case addLiquiditySignature:
+		transfer := s.createLiquidityRecord(tx, "ADD")
+		return InteractionAddLiquidity, transfer
+
+	case removeLiquiditySignature:
+		transfer := s.createLiquidityRecord(tx, "REMOVE")
+		return InteractionRemoveLiquidity, transfer
+
+	case depositSignature:
+		transfer := s.createDepositWithdrawRecord(tx, "DEPOSIT")
+		return InteractionDeposit, transfer
+
+	case withdrawSignature:
+		transfer := s.createDepositWithdrawRecord(tx, "WITHDRAW")
+		return InteractionWithdraw, transfer
+
+	case multicallSignature:
+		transfer := s.createMulticallRecord(tx)
+		return InteractionMulticall, transfer
+
+	default:
+		s.logger.Debug("Unknown method signature",
+			zap.String("tx_hash", tx.Hash),
+			zap.String("method_sig", methodSig))
+		return InteractionUnknown, nil
+	}
 }
 
 // decodeDirectTransfer decodes direct ERC20 transfer function calls
@@ -247,50 +386,64 @@ func (s *ERC20DecoderService) decodeAlternativeFormats(tx *entity.Transaction) (
 	return nil, fmt.Errorf("no alternative decoding method succeeded")
 }
 
-// decodeTransferMethod decodes transfer(address,uint256) calls
+// decodeTransferMethod decodes ERC20 transfer function calls (enhanced)
 func (s *ERC20DecoderService) decodeTransferMethod(tx *entity.Transaction, data string) (*entity.ERC20Transfer, error) {
-	// This is essentially the same as decodeDirectTransfer but separated for clarity
-	return s.decodeDirectTransfer(tx)
-}
-
-// decodeTransferFromMethod decodes transferFrom(address,address,uint256) calls
-func (s *ERC20DecoderService) decodeTransferFromMethod(tx *entity.Transaction, data string) (*entity.ERC20Transfer, error) {
-	s.logger.Debug("Decoding transferFrom method",
-		zap.String("tx_hash", tx.Hash))
-
-	// transferFrom(address from, address to, uint256 value)
-	// - from: 32 bytes (address padded)
-	// - to: 32 bytes (address padded)
-	// - value: 32 bytes (uint256)
-
-	if len(data) < 8+64+64+64 { // method sig + from + to + value
-		return nil, fmt.Errorf("insufficient data for transferFrom function: %d characters", len(data))
+	// transfer(address to, uint256 value)
+	if len(data) < 8+64+64 {
+		return nil, fmt.Errorf("insufficient data for transfer function: %d characters", len(data))
 	}
 
-	// Extract 'from' address (bytes 8-72, take last 40 characters)
-	fromHex := strings.ToLower(data[8+24 : 8+64])
-	fromAddress := "0x" + fromHex
-
-	// Extract 'to' address (bytes 72-136, take last 40 characters)
-	toHex := strings.ToLower(data[8+64+24 : 8+64+64])
+	// Extract 'to' address (bytes 8-72, take last 40 characters)
+	toHex := strings.ToLower(data[8+24 : 8+64])
 	toAddress := "0x" + toHex
 
-	// Extract value (bytes 136-200)
-	valueHex := data[8+64+64 : 8+64+64+64]
+	// Extract value (bytes 72-136)
+	valueHex := data[8+64 : 8+128]
 	value := new(big.Int)
 	_, success := value.SetString(valueHex, 16)
 	if !success {
 		return nil, fmt.Errorf("failed to parse value hex: %s", valueHex)
 	}
 
-	s.logger.Debug("Parsed transferFrom parameters",
-		zap.String("tx_hash", tx.Hash),
-		zap.String("from_address", fromAddress),
-		zap.String("to_address", toAddress),
-		zap.String("value_decimal", value.String()))
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              toAddress,
+		Value:           value.String(),
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+		InteractionType: entity.InteractionTransfer,
+		MethodSignature: transferSignature,
+		Success:         true,
+	}, nil
+}
 
-	// Create ERC20 transfer
-	transfer := &entity.ERC20Transfer{
+// decodeTransferFromMethod decodes ERC20 transferFrom function calls (enhanced)
+func (s *ERC20DecoderService) decodeTransferFromMethod(tx *entity.Transaction, data string) (*entity.ERC20Transfer, error) {
+	// transferFrom(address from, address to, uint256 value)
+	if len(data) < 8+64+64+64 {
+		return nil, fmt.Errorf("insufficient data for transferFrom function: %d characters", len(data))
+	}
+
+	// Extract 'from' address (bytes 8-72)
+	fromHex := strings.ToLower(data[8+24 : 8+64])
+	fromAddress := "0x" + fromHex
+
+	// Extract 'to' address (bytes 72-136)
+	toHex := strings.ToLower(data[8+64+24 : 8+128])
+	toAddress := "0x" + toHex
+
+	// Extract value (bytes 136-200)
+	valueHex := data[8+128 : 8+192]
+	value := new(big.Int)
+	_, success := value.SetString(valueHex, 16)
+	if !success {
+		return nil, fmt.Errorf("failed to parse value hex: %s", valueHex)
+	}
+
+	return &entity.ERC20Transfer{
 		ContractAddress: tx.To,
 		From:            fromAddress,
 		To:              toAddress,
@@ -299,9 +452,191 @@ func (s *ERC20DecoderService) decodeTransferFromMethod(tx *entity.Transaction, d
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
+		InteractionType: entity.InteractionTransferFrom,
+		MethodSignature: transferFromSignature,
+		Success:         true,
+	}, nil
+}
+
+// decodeApprovalMethod decodes ERC20 approve function calls (enhanced)
+func (s *ERC20DecoderService) decodeApprovalMethod(tx *entity.Transaction, data string) (*entity.ERC20Transfer, error) {
+	// approve(address spender, uint256 value)
+	if len(data) < 8+64+64 {
+		return nil, fmt.Errorf("insufficient data for approve function: %d characters", len(data))
 	}
 
-	return transfer, nil
+	// Extract spender address (bytes 8-72, take last 40 characters)
+	spenderHex := strings.ToLower(data[8+24 : 8+64])
+	spenderAddress := "0x" + spenderHex
+
+	// Extract value (bytes 72-136)
+	valueHex := data[8+64 : 8+128]
+	value := new(big.Int)
+	_, success := value.SetString(valueHex, 16)
+	if !success {
+		return nil, fmt.Errorf("failed to parse value hex: %s", valueHex)
+	}
+
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              spenderAddress,
+		Value:           value.String(),
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+		InteractionType: entity.InteractionApprove,
+		MethodSignature: approveSignature,
+		Success:         true,
+	}, nil
+}
+
+// decodeAllowanceMethod decodes increaseAllowance/decreaseAllowance function calls (enhanced)
+func (s *ERC20DecoderService) decodeAllowanceMethod(tx *entity.Transaction, data string, operation string) (*entity.ERC20Transfer, error) {
+	// increaseAllowance(address spender, uint256 addedValue)
+	// decreaseAllowance(address spender, uint256 subtractedValue)
+	if len(data) < 8+64+64 {
+		return nil, fmt.Errorf("insufficient data for %s allowance function: %d characters", operation, len(data))
+	}
+
+	// Extract spender address
+	spenderHex := strings.ToLower(data[8+24 : 8+64])
+	spenderAddress := "0x" + spenderHex
+
+	// Extract value
+	valueHex := data[8+64 : 8+128]
+	value := new(big.Int)
+	_, success := value.SetString(valueHex, 16)
+	if !success {
+		return nil, fmt.Errorf("failed to parse value hex: %s", valueHex)
+	}
+
+	var interactionType entity.ContractInteractionType
+	var methodSig string
+	if operation == "INCREASE" {
+		interactionType = entity.InteractionIncreaseAllowance
+		methodSig = increaseAllowanceSignature
+	} else {
+		interactionType = entity.InteractionDecreaseAllowance
+		methodSig = decreaseAllowanceSignature
+	}
+
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              spenderAddress,
+		Value:           value.String(),
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+		InteractionType: interactionType,
+		MethodSignature: methodSig,
+		Success:         true,
+	}, nil
+}
+
+// createSwapRecord creates a record for DEX swap operations
+func (s *ERC20DecoderService) createSwapRecord(tx *entity.Transaction, methodSig string) *entity.ERC20Transfer {
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+	}
+}
+
+// createLiquidityRecord creates a record for liquidity operations
+func (s *ERC20DecoderService) createLiquidityRecord(tx *entity.Transaction, operation string) *entity.ERC20Transfer {
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+	}
+}
+
+// createDepositWithdrawRecord creates a record for deposit/withdraw operations
+func (s *ERC20DecoderService) createDepositWithdrawRecord(tx *entity.Transaction, operation string) *entity.ERC20Transfer {
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+	}
+}
+
+// createMulticallRecord creates a record for multicall operations
+func (s *ERC20DecoderService) createMulticallRecord(tx *entity.Transaction) *entity.ERC20Transfer {
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+	}
+}
+
+// createETHTransferRecord creates a record for pure ETH transfers
+func (s *ERC20DecoderService) createETHTransferRecord(tx *entity.Transaction) *entity.ERC20Transfer {
+	return &entity.ERC20Transfer{
+		ContractAddress: "ETH",
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+		InteractionType: entity.InteractionETHTransfer,
+		MethodSignature: "ETH_TRANSFER",
+		Success:         true,
+	}
+}
+
+// createUnknownContractCallRecord creates a record for unknown contract calls
+func (s *ERC20DecoderService) createUnknownContractCallRecord(tx *entity.Transaction) *entity.ERC20Transfer {
+	// Extract method signature from transaction data
+	methodSig := "UNKNOWN"
+	if tx.Data != "" && tx.Data != "0x" && len(tx.Data) >= 10 {
+		data := tx.Data
+		if strings.HasPrefix(data, "0x") {
+			data = data[2:]
+		}
+		if len(data) >= 8 {
+			methodSig = strings.ToLower(data[:8])
+		}
+	}
+
+	return &entity.ERC20Transfer{
+		ContractAddress: tx.To,
+		From:            tx.From,
+		To:              tx.To,
+		Value:           tx.Value,
+		TxHash:          tx.Hash,
+		BlockNumber:     tx.BlockNumber,
+		Timestamp:       tx.Timestamp,
+		Network:         tx.Network,
+		InteractionType: entity.InteractionUnknownContract,
+		MethodSignature: methodSig,
+		Success:         true, // Assume success if transaction was mined
+	}
 }
 
 // IsERC20Contract checks if an address is an ERC20 contract
