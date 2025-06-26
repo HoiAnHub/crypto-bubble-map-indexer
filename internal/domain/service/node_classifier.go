@@ -3,12 +3,21 @@ package service
 import (
 	"context"
 	"crypto-bubble-map-indexer/internal/domain/entity"
+	"crypto-bubble-map-indexer/internal/infrastructure/logger"
 	"fmt"
 	"math/big"
 	"regexp"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
+
+// BlockchainService interface for querying blockchain data
+type BlockchainService interface {
+	// GetCodeAt returns the contract bytecode at the given address
+	GetCodeAt(ctx context.Context, address string, blockNumber *big.Int) ([]byte, error)
+}
 
 // NodeClassifierService handles node classification logic
 type NodeClassifierService struct {
@@ -17,16 +26,20 @@ type NodeClassifierService struct {
 	blacklistedAddrs map[string]string   // address -> reason
 	sanctionedAddrs  map[string]string   // address -> sanction details
 	knownContracts   map[string]entity.NodeType
+	blockchain       BlockchainService // Add blockchain service
+	logger           *logger.Logger    // Add logger
 }
 
 // NewNodeClassifierService creates a new node classifier service
-func NewNodeClassifierService() *NodeClassifierService {
+func NewNodeClassifierService(blockchain BlockchainService, logger *logger.Logger) *NodeClassifierService {
 	service := &NodeClassifierService{
 		rules:            []entity.NodeClassificationRule{},
 		exchangePatterns: make(map[string][]string),
 		blacklistedAddrs: make(map[string]string),
 		sanctionedAddrs:  make(map[string]string),
 		knownContracts:   make(map[string]entity.NodeType),
+		blockchain:       blockchain,
+		logger:           logger.WithComponent("node-classifier"),
 	}
 
 	service.initializeDefaultRules()
@@ -77,24 +90,60 @@ func (ncs *NodeClassifierService) ClassifyNode(ctx context.Context, address stri
 		return classification, nil
 	}
 
-	// 2. Check known contracts
+	// 2. CRITICAL IMPROVEMENT: Check if address is EOA or Contract using bytecode
+	isContract, contractType, err := ncs.checkAddressType(ctx, address)
+	if err != nil {
+		ncs.logger.Warn("Failed to check address type",
+			zap.String("address", address),
+			zap.Error(err))
+		// Continue with other classification methods if bytecode check fails
+	} else {
+		classification.DetectionMethods = append(classification.DetectionMethods, string(entity.DetectionMethodBytecodeAnalysis))
+
+		if isContract {
+			// Address is a smart contract
+			classification.Tags = append(classification.Tags, "smart_contract")
+
+			// Use contract type if detected
+			if contractType != entity.NodeTypeUnknown {
+				classification.PrimaryType = contractType
+				classification.ConfidenceScore = 0.9
+				classification.RiskLevel = contractType.GetDefaultRiskLevel()
+				return classification, nil
+			}
+			// If contract type not determined, continue with further analysis
+		} else {
+			// Address is EOA (Externally Owned Account)
+			classification.PrimaryType = entity.NodeTypeEOA
+			classification.Tags = append(classification.Tags, "eoa")
+			classification.ConfidenceScore = 0.9
+			classification.RiskLevel = entity.RiskLevelLow
+			// Continue with EOA-specific analysis
+		}
+	}
+
+	// 3. Check known contracts
 	if nodeType, exists := ncs.knownContracts[address]; exists {
 		classification.PrimaryType = nodeType
 		classification.RiskLevel = nodeType.GetDefaultRiskLevel()
 		classification.ConfidenceScore = 0.9
-		classification.DetectionMethods = []string{string(entity.DetectionMethodManual)}
+		classification.DetectionMethods = append(classification.DetectionMethods, string(entity.DetectionMethodManual))
 		return classification, nil
 	}
 
-	// 3. Check exchange patterns
+	// 4. Check exchange patterns
 	for exchange, patterns := range ncs.exchangePatterns {
 		for _, pattern := range patterns {
 			if matched, _ := regexp.MatchString(pattern, address); matched {
-				classification.PrimaryType = entity.NodeTypeExchangeWallet
+				if isContract {
+					classification.PrimaryType = entity.NodeTypeExchangeHotWallet // Exchange contract
+				} else {
+					classification.PrimaryType = entity.NodeTypeExchangeWallet // Exchange EOA
+				}
 				classification.Exchanges = []string{exchange}
 				classification.ConfidenceScore = 0.8
 				classification.RiskLevel = entity.RiskLevelLow
-				classification.DetectionMethods = []string{string(entity.DetectionMethodPatternAnalysis)}
+				classification.DetectionMethods = append(classification.DetectionMethods, string(entity.DetectionMethodPatternAnalysis))
 				break
 			}
 		}
@@ -103,20 +152,28 @@ func (ncs *NodeClassifierService) ClassifyNode(ctx context.Context, address stri
 		}
 	}
 
-	// 4. Analyze transaction patterns if statistics available
+	// 5. Analyze transaction patterns if statistics available
 	if stats != nil {
-		ncs.analyzeTransactionPatterns(classification, stats, patterns)
+		ncs.analyzeTransactionPatterns(classification, stats, patterns, isContract)
 	}
 
-	// 5. Apply classification rules
-	ncs.applyClassificationRules(classification, stats, patterns)
+	// 6. Apply classification rules
+	ncs.applyClassificationRules(classification, stats, patterns, isContract)
 
-	// 6. Set default if still unknown
+	// 7. Set default if still unknown
 	if classification.PrimaryType == entity.NodeTypeUnknown {
-		classification.PrimaryType = entity.NodeTypeEOA
-		classification.RiskLevel = entity.RiskLevelLow
-		classification.ConfidenceScore = 0.3
-		classification.DetectionMethods = []string{string(entity.DetectionMethodHeuristic)}
+		if isContract {
+			// Default for unknown contracts
+			classification.PrimaryType = entity.NodeTypeTokenContract // Most common contract type
+			classification.RiskLevel = entity.RiskLevelLow
+			classification.ConfidenceScore = 0.3
+		} else {
+			// Default for EOAs
+			classification.PrimaryType = entity.NodeTypeEOA
+			classification.RiskLevel = entity.RiskLevelLow
+			classification.ConfidenceScore = 0.3
+		}
+		classification.DetectionMethods = append(classification.DetectionMethods, string(entity.DetectionMethodHeuristic))
 	}
 
 	return classification, nil
@@ -124,7 +181,7 @@ func (ncs *NodeClassifierService) ClassifyNode(ctx context.Context, address stri
 
 // analyzeTransactionPatterns analyzes transaction patterns to help classify nodes
 func (ncs *NodeClassifierService) analyzeTransactionPatterns(classification *entity.NodeClassification,
-	stats *entity.WalletStats, patterns []string) {
+	stats *entity.WalletStats, patterns []string, isContract bool) {
 
 	// High-frequency trading patterns (MEV/Arbitrage bots)
 	if stats.TransactionCount > 1000 {
@@ -172,7 +229,7 @@ func (ncs *NodeClassifierService) analyzeTransactionPatterns(classification *ent
 
 // applyClassificationRules applies the configured classification rules
 func (ncs *NodeClassifierService) applyClassificationRules(classification *entity.NodeClassification,
-	stats *entity.WalletStats, patterns []string) {
+	stats *entity.WalletStats, patterns []string, isContract bool) {
 
 	for _, rule := range ncs.rules {
 		score := ncs.calculateRuleScore(rule, classification, stats, patterns)
@@ -425,4 +482,73 @@ type RiskAssessment struct {
 	Recommendations []string             `json:"recommendations"`
 	LastAssessed    time.Time            `json:"last_assessed"`
 	Confidence      float64              `json:"confidence"`
+}
+
+// checkAddressType checks if an address is a contract or EOA by examining bytecode
+func (ncs *NodeClassifierService) checkAddressType(ctx context.Context, address string) (isContract bool, contractType entity.NodeType, err error) {
+	// Get bytecode at the address
+	code, err := ncs.blockchain.GetCodeAt(ctx, address, nil) // nil = latest block
+	if err != nil {
+		return false, entity.NodeTypeUnknown, fmt.Errorf("failed to get code at address %s: %w", address, err)
+	}
+
+	// If bytecode is empty or just "0x", it's an EOA
+	if len(code) == 0 {
+		return false, entity.NodeTypeUnknown, nil
+	}
+
+	// If bytecode exists, it's a contract
+	isContract = true
+
+	// Try to determine contract type based on bytecode patterns
+	contractType = ncs.analyzeContractType(code, address)
+
+	return isContract, contractType, nil
+}
+
+// analyzeContractType attempts to determine contract type from bytecode
+func (ncs *NodeClassifierService) analyzeContractType(bytecode []byte, address string) entity.NodeType {
+	// Convert bytecode to hex string for analysis
+	codeHex := fmt.Sprintf("%x", bytecode)
+
+	// Check for common contract patterns
+
+	// ERC20 Token patterns (look for transfer, approve function signatures)
+	if strings.Contains(codeHex, "a9059cbb") && strings.Contains(codeHex, "095ea7b3") {
+		return entity.NodeTypeTokenContract
+	}
+
+	// Uniswap V2 Router patterns
+	if strings.Contains(codeHex, "7ff36ab5") || strings.Contains(codeHex, "18cbafe5") {
+		return entity.NodeTypeDEXContract
+	}
+
+	// Multicall patterns
+	if strings.Contains(codeHex, "ac9650d8") {
+		return entity.NodeTypeMultisigContract // or could be a new NodeTypeMulticall
+	}
+
+	// Compound/Lending patterns (mint, redeem)
+	if strings.Contains(codeHex, "a6afed95") || strings.Contains(codeHex, "852a12e3") {
+		return entity.NodeTypeLendingContract
+	}
+
+	// WETH pattern (deposit/withdraw)
+	if strings.Contains(codeHex, "d0e30db0") && strings.Contains(codeHex, "2e1a7d4d") {
+		// Could be WETH or other deposit/withdraw contract
+		return entity.NodeTypeTokenContract
+	}
+
+	// Proxy contract patterns (common proxy bytecode)
+	if strings.Contains(codeHex, "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc") {
+		return entity.NodeTypeProxyContract
+	}
+
+	// Factory contract patterns
+	if strings.Contains(codeHex, "5af43d82803e903d91602b57fd5bf3") { // CREATE2 bytecode pattern
+		return entity.NodeTypeFactoryContract
+	}
+
+	// Default to unknown contract if no patterns match
+	return entity.NodeTypeTokenContract // Most contracts are tokens
 }

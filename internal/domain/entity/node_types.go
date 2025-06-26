@@ -231,14 +231,15 @@ type NodeClassificationRule struct {
 type DetectionMethod string
 
 const (
-	DetectionMethodPatternAnalysis DetectionMethod = "PATTERN_ANALYSIS"
-	DetectionMethodMLModel         DetectionMethod = "ML_MODEL"
-	DetectionMethodManual          DetectionMethod = "MANUAL"
-	DetectionMethodOSINT           DetectionMethod = "OSINT" // Open Source Intelligence
-	DetectionMethodBlocklist       DetectionMethod = "BLOCKLIST"
-	DetectionMethodHeuristic       DetectionMethod = "HEURISTIC"
-	DetectionMethodCommunity       DetectionMethod = "COMMUNITY"
-	DetectionMethodExchange        DetectionMethod = "EXCHANGE_LABEL"
+	DetectionMethodPatternAnalysis  DetectionMethod = "PATTERN_ANALYSIS"
+	DetectionMethodMLModel          DetectionMethod = "ML_MODEL"
+	DetectionMethodManual           DetectionMethod = "MANUAL"
+	DetectionMethodOSINT            DetectionMethod = "OSINT" // Open Source Intelligence
+	DetectionMethodBlocklist        DetectionMethod = "BLOCKLIST"
+	DetectionMethodHeuristic        DetectionMethod = "HEURISTIC"
+	DetectionMethodCommunity        DetectionMethod = "COMMUNITY"
+	DetectionMethodExchange         DetectionMethod = "EXCHANGE_LABEL"
+	DetectionMethodBytecodeAnalysis DetectionMethod = "BYTECODE_ANALYSIS" // New method for contract detection
 )
 
 // RelationshipType represents different types of relationships between nodes
