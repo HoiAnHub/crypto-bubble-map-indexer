@@ -155,7 +155,7 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 
 	switch relType {
 	case "ERC20_TRANSFER":
-		// For transfers, create relationship between wallets
+		// For transfers, create relationship between wallets with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -169,15 +169,20 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
 				r.contract_address = rel.contract_address,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	case "ERC20_APPROVAL":
-		// For approvals, create relationship from wallet to contract/spender
+		// For approvals, create relationship from wallet to contract/spender with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -191,15 +196,20 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
 				r.spender = rel.to_address,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = rel.value,
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	case "DEX_SWAP":
-		// For swaps, create relationship from wallet to DEX contract
+		// For swaps, create relationship from wallet to DEX contract with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -211,15 +221,20 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.first_tx = datetime(rel.timestamp),
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	case "LIQUIDITY_OPERATION":
-		// For liquidity operations
+		// For liquidity operations with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -231,15 +246,20 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.first_tx = datetime(rel.timestamp),
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	case "DEFI_OPERATION":
-		// For DeFi operations (deposit/withdraw)
+		// For DeFi operations (deposit/withdraw) with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -251,15 +271,45 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.first_tx = datetime(rel.timestamp),
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
+		`
+
+	case "MULTICALL_OPERATION":
+		// For multicall operations with tx_details
+		query = `
+			UNWIND $relationships as rel
+			MATCH (from:Wallet {address: rel.from_address})
+			MATCH (contract:ERC20Contract {address: rel.contract_address})
+			MERGE (from)-[r:MULTICALL_OPERATION {contract_address: rel.contract_address}]->(contract)
+			ON CREATE SET
+				r.total_value = rel.value,
+				r.tx_count = 1,
+				r.first_tx = datetime(rel.timestamp),
+				r.last_tx = datetime(rel.timestamp),
+				r.interaction_type = rel.interaction_type,
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
+			ON MATCH SET
+				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
+				r.tx_count = r.tx_count + 1,
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	case "ETH_TRANSFER":
-		// For ETH transfers, create simple relationship
+		// For ETH transfers, create simple relationship with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -271,15 +321,20 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.first_tx = datetime(rel.timestamp),
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 
 	default:
-		// For unknown contract interactions
+		// For unknown contract interactions with tx_details
 		query = `
 			UNWIND $relationships as rel
 			MATCH (from:Wallet {address: rel.from_address})
@@ -291,18 +346,32 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 				r.first_tx = datetime(rel.timestamp),
 				r.last_tx = datetime(rel.timestamp),
 				r.interaction_type = rel.interaction_type,
-				r.network = rel.network
+				r.network = rel.network,
+				r.tx_details = [rel.tx_detail]
 			ON MATCH SET
 				r.total_value = toString(toFloat(r.total_value) + toFloat(rel.value)),
 				r.tx_count = r.tx_count + 1,
-				r.last_tx = datetime(rel.timestamp)
+				r.last_tx = datetime(rel.timestamp),
+				r.tx_details = CASE
+					WHEN r.tx_details IS NULL THEN [rel.tx_detail]
+					ELSE r.tx_details + rel.tx_detail
+				END
 		`
 	}
 
-	// Prepare relationship data
+	// Prepare relationship data with tx_details
 	var relData []map[string]interface{}
 	for _, rel := range relationships {
 		timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
+
+		// Create tx_detail string in format "hash:value:timestamp:interaction_type:method_signature"
+		// Enhanced format similar to SENT_TO but with more details for better tracking
+		txDetail := fmt.Sprintf("%s:%s:%s:%s:%s",
+			rel.TxHash,
+			rel.Value,
+			timestampStr,
+			string(rel.InteractionType),
+			rel.MethodSignature)
 
 		relData = append(relData, map[string]interface{}{
 			"from_address":     rel.FromAddress,
@@ -312,6 +381,7 @@ func (r *Neo4JERC20Repository) batchCreateRelationshipsByType(ctx context.Contex
 			"timestamp":        timestampStr,
 			"interaction_type": string(rel.InteractionType),
 			"network":          rel.Network,
+			"tx_detail":        txDetail,
 		})
 	}
 

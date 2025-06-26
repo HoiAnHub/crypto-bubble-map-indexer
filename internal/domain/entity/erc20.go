@@ -67,6 +67,7 @@ type ERC20TransferRelationship struct {
 	Timestamp        time.Time               `json:"timestamp"`
 	Network          string                  `json:"network"`
 	InteractionType  ContractInteractionType `json:"interaction_type"`  // New field
+	MethodSignature  string                  `json:"method_signature"`  // New field for method signature
 	TotalValue       string                  `json:"total_value"`       // New field for aggregated value
 	TransactionCount int64                   `json:"transaction_count"` // New field for count
 	FirstInteraction time.Time               `json:"first_interaction"` // New field

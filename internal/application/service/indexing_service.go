@@ -131,6 +131,7 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 					Timestamp:        transfer.Timestamp,
 					Network:          transfer.Network,
 					InteractionType:  transfer.InteractionType,
+					MethodSignature:  transfer.MethodSignature,
 					TotalValue:       transfer.Value,
 					TransactionCount: 1,
 					FirstInteraction: transfer.Timestamp,
