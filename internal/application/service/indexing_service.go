@@ -80,13 +80,15 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 
 	// Prepare batch data
 	var relationships []*entity.TransactionRelationship
+	var erc20Relationships []*entity.ERC20TransferRelationship
 	walletMap := make(map[string]*entity.Wallet)
+	contractMap := make(map[string]*entity.ERC20Contract)
 
 	for _, tx := range transactions {
 		// Prepare wallet data
 		s.prepareWalletData(tx, walletMap)
 
-		// Prepare relationship data
+		// Prepare regular transaction relationship data
 		rel := &entity.TransactionRelationship{
 			FromAddress: tx.From,
 			ToAddress:   tx.To,
@@ -96,6 +98,53 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 			TxHash:      tx.Hash,
 		}
 		relationships = append(relationships, rel)
+
+		// Process ERC20 transfers for this transaction
+		erc20Transfers, err := s.erc20Decoder.DecodeERC20Transfer(ctx, tx)
+		if err != nil {
+			s.logger.Debug("Failed to decode ERC20 transfers",
+				zap.String("tx_hash", tx.Hash),
+				zap.Error(err))
+			continue // Skip ERC20 processing for this transaction
+		}
+
+		// Process each ERC20 transfer
+		for _, transfer := range erc20Transfers {
+			s.logger.Info("Found ERC20 transfer in batch",
+				zap.String("tx_hash", tx.Hash),
+				zap.String("from", transfer.From),
+				zap.String("to", transfer.To),
+				zap.String("contract", transfer.ContractAddress))
+
+			// Prepare ERC20 contract
+			if _, exists := contractMap[transfer.ContractAddress]; !exists {
+				contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
+					Address:   transfer.ContractAddress,
+					Name:      "Unknown Token",
+					Symbol:    "UNK",
+					Decimals:  18,
+					FirstSeen: transfer.Timestamp,
+					LastSeen:  transfer.Timestamp,
+					TotalTxs:  1,
+					Network:   transfer.Network,
+				}
+			} else {
+				contractMap[transfer.ContractAddress].LastSeen = transfer.Timestamp
+				contractMap[transfer.ContractAddress].TotalTxs++
+			}
+
+			// Prepare ERC20 transfer relationship
+			transferRel := &entity.ERC20TransferRelationship{
+				FromAddress:     transfer.From,
+				ToAddress:       transfer.To,
+				ContractAddress: transfer.ContractAddress,
+				Value:           transfer.Value,
+				TxHash:          transfer.TxHash,
+				Timestamp:       transfer.Timestamp,
+				Network:         transfer.Network,
+			}
+			erc20Relationships = append(erc20Relationships, transferRel)
+		}
 	}
 
 	// Batch create/update wallets
@@ -103,12 +152,37 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 		return fmt.Errorf("failed to batch create/update wallets: %w", err)
 	}
 
-	// Batch create relationships
+	// Batch create regular transaction relationships
 	if err := s.transactionRepo.BatchCreateRelationships(ctx, relationships); err != nil {
 		return fmt.Errorf("failed to batch create relationships: %w", err)
 	}
 
-	s.logger.Info("Successfully processed transaction batch", zap.Int("count", len(transactions)))
+	// Batch create/update ERC20 contracts
+	for _, contract := range contractMap {
+		if err := s.erc20Repo.CreateOrUpdateERC20Contract(ctx, contract); err != nil {
+			s.logger.Error("Failed to create/update ERC20 contract in batch",
+				zap.String("contract", contract.Address),
+				zap.Error(err))
+			// Continue processing other contracts
+		}
+	}
+
+	// Batch create ERC20 transfer relationships
+	if len(erc20Relationships) > 0 {
+		if err := s.erc20Repo.BatchCreateERC20TransferRelationships(ctx, erc20Relationships); err != nil {
+			s.logger.Error("Failed to batch create ERC20 transfer relationships",
+				zap.Int("count", len(erc20Relationships)),
+				zap.Error(err))
+			// Don't return error to avoid failing the entire batch
+		} else {
+			s.logger.Info("Successfully created ERC20 transfer relationships in batch",
+				zap.Int("count", len(erc20Relationships)))
+		}
+	}
+
+	s.logger.Info("Successfully processed transaction batch",
+		zap.Int("count", len(transactions)),
+		zap.Int("erc20_transfers", len(erc20Relationships)))
 	return nil
 }
 
