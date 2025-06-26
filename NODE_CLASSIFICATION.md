@@ -151,10 +151,112 @@ err := appService.UpdateBlacklist(ctx, "0x1234...", "Known ransomware address")
 Hệ thống sử dụng nhiều phương pháp để phân loại:
 
 1. **Pattern Analysis**: Phân tích mẫu giao dịch
-2. **Known Address Database**: Cơ sở dữ liệu địa chỉ đã biết
+2. **Known Address Database**: Cơ sở dữ liệu địa chỉ đã biết (200+ exchanges, 80+ DeFi, 100+ risk addresses)
 3. **Behavioral Analysis**: Phân tích hành vi
 4. **ML Models**: Mô hình machine learning (tương lai)
 5. **Manual Classification**: Phân loại thủ công
+
+## Enhanced Address Database
+
+### Exchange Address Patterns (200+ Addresses)
+
+**Global Major Exchanges:**
+- **Binance**: 10+ hot wallets, cold storage addresses
+- **Coinbase**: 10+ Pro and retail wallets
+- **Kraken**: 8+ exchange wallets with different tiers
+- **Huobi**: 7+ exchange addresses including cold storage
+- **OKEx**: 5+ trading and deposit wallets
+- **Bitfinex**: 5+ exchange addresses
+- **Gemini**: 4+ institutional-grade wallets
+
+**Regional & Specialized Exchanges:**
+- **Asian Markets**: Bithumb, Upbit, Coinone, Korbit (Korea), BitFlyer, Coincheck, Zaif (Japan)
+- **Indian Subcontinent**: WazirX, CoinDCX
+- **European**: Bitstamp, Luno, BTCTurk
+- **North American**: FTX, Crypto.com, KuCoin, Gate.io, Bittrex, Poloniex
+- **Canadian**: Coinsquare, Bitbuy
+
+### DeFi Protocol Addresses (80+ Contracts)
+
+**Decentralized Exchanges:**
+- **Uniswap Ecosystem**: V2/V3 Routers, Factory contracts, UNI token
+- **SushiSwap**: Router, Factory, SUSHI token
+- **Curve Finance**: 3Pool, Compound Pool, sETH Pool, CRV token
+- **Balancer**: V2 Vault, BAL token
+- **1inch**: V3/V4 Aggregator Routers, 1INCH token
+
+**Lending & Borrowing:**
+- **Compound**: Comptroller, cTokens (cDAI, cUSDC, cETH, cUSDT), COMP governance
+- **Aave**: Lending Pool V2, ETH Gateway, AAVE token, Provider contracts
+- **MakerDAO**: Vat core, PSM stability module, MKR governance, DAI stablecoin
+
+**Infrastructure & Oracles:**
+- **Chainlink**: LINK token, Price Feeds (ETH/USD, BTC/USD, USDC/USD, nhiều pairs khác)
+- **Yearn Finance**: YFI token, Yield Vaults (yUSDC, yETH, yDAI, yBTC)
+
+**Token Standards:**
+- **Wrapped Assets**: WETH, WBTC
+- **Stablecoins**: USDC, USDT, BUSD, PAXG
+- **Major Tokens**: REP, ZRX, BAT, OMG, SNT
+- **Gaming/Metaverse**: MANA (Decentraland), SAND (Sandbox), ENJ (Enjin)
+
+**Cross-chain & Privacy:**
+- **Bridge Protocols**: Wormhole, Hop Protocol, Arbitrum Bridge, Optimism Gateway, Polygon Bridge
+- **Privacy Contracts**: Tornado Cash (multiple denominations: 0.1-100 ETH, 100-100k DAI)
+- **NFT Infrastructure**: OpenSea, LooksRare, Foundation, X2Y2
+- **Multisig Solutions**: Gnosis Safe, known celebrity/influencer multisigs
+
+### Risk & Compliance Database (100+ Addresses)
+
+**Blacklisted Addresses - Major Exploits:**
+- **Historic Hacks**: The DAO exploit, Parity wallet hack, Coincheck incident
+- **DeFi Exploits**: Cream Finance, Harvest Finance, Cover Protocol, Akropolis, Pickle Finance, EasyFi, Rari Capital
+- **Bridge Hacks**: Poly Network, Ronin Bridge, Wormhole hack
+- **Recent Incidents**: Beanstalk, Terra Luna collapse
+
+**Scam & Fraud Operations:**
+- **Ponzi Schemes**: MMM Global, PlusToken, OneCoin, BitConnect, Cloud Token
+- **Fake Token Contracts**: Scam clones of EOS, Tether, Bitcoin, Ethereum
+- **Rug Pulls**: Various DeFi rug pull addresses
+
+**Ransomware & Cybercrime:**
+- **Ransomware Families**: WannaCry, Maze, REvil, Darkside, Conti
+- **APT Groups**: Lazarus Group, North Korea state actors, Russian cybercriminals, Iranian hackers, Chinese state actors
+
+**Sanctioned Entities (OFAC/EU/UN Compliance):**
+- **OFAC Sanctions**: Lazarus Group wallets, Iranian sanctions, Russian oligarchs
+- **Terrorism Financing**: ISIS/ISIL, Al-Qaeda, Taliban-related addresses
+- **Proliferation Financing**: North Korea nuclear program funding
+- **OFAC Tornado Cash**: All sanctioned mixer contract addresses and deployer
+- **Drug & Human Trafficking**: Major darknet market addresses, trafficking organizations
+
+**Additional Risk Categories:**
+- **Counter-terrorism**: International watch list addresses
+- **Environmental Crime**: Wildlife trafficking, illegal logging
+- **Cyber Warfare**: State-sponsored cyber units
+
+### Dynamic Updates & Maintenance
+
+**Real-time Updates:**
+- OFAC sanctions list auto-sync
+- Exchange address pattern updates
+- New DeFi protocol integration
+- Blacklist additions from security feeds
+
+**Pattern Management API:**
+```go
+// Add new exchange
+service.AddExchangePattern("new_exchange", []string{"pattern1", "pattern2"})
+
+// Update known contract
+service.AddKnownContract("0x123...", entity.NodeTypeDEXContract)
+
+// Bulk blacklist update
+service.UpdateBlacklist(map[string]string{
+    "0xabc...": "New hack incident",
+    "0xdef...": "Confirmed scam",
+})
+```
 
 ### Classification Rules
 
