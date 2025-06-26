@@ -364,7 +364,7 @@ func (ncs *NodeClassifierService) initializeDefaultRules() {
 func (ncs *NodeClassifierService) initializeKnownPatterns() {
 	// Exchange patterns (simplified examples)
 	ncs.exchangePatterns = map[string][]string{
-		"binance":   {"^0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be$", "^0xd551234ae421e3bcba99a0da6d736074f22192ff$"},
+		"binance":   {"^0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be$", "^0xd551234ae421e3bcba99a0da6d736074f22192ff$", "^0x48f9bE7AC3071B46853E8A1972ADE0b155Ce0333$"},
 		"coinbase":  {"^0x71660c4005ba85c37ccec55d0c4493e66fe775d3$", "^0x503828976d22510aad0201ac7ec88293211d23da$"},
 		"okex":      {"^0x6cc5f688a315f3dc28a7781717a9a798a59fda7b$"},
 		"huobi":     {"^0xdc76cd25977e0a5ae17155770273ad58648900d3$", "^0xab5c66752a9e8167967685f1450532fb96d5d24f$"},
