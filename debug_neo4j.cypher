@@ -54,3 +54,15 @@ LIMIT 5;
 MATCH (c:ERC20Contract)
 RETURN c.address, c.name, c.symbol
 LIMIT 5;
+
+// Find all DEX traders
+MATCH (wallet:Wallet)-[:DEX_SWAP]->(dex:ERC20Contract)
+RETURN wallet, dex
+
+// Find approval patterns
+MATCH (wallet:Wallet)-[:ERC20_APPROVAL]->(contract:ERC20Contract)
+RETURN wallet, contract, count(*) as approval_count
+
+// Find multi-protocol users
+MATCH (wallet:Wallet)-[r:DEFI_OPERATION|DEX_SWAP|LIQUIDITY_OPERATION]->(contract)
+RETURN wallet, collect(type(r)) as interaction_types
