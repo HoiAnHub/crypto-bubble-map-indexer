@@ -36,3 +36,21 @@ MATCH ()-[r:SENT_TO]->()
 WHERE exists(r.tx_details)
 RETURN r.tx_details[0] as sample_tx_detail
 LIMIT 5;
+
+// 1. Kiểm tra tất cả relationship types trong database
+CALL db.relationshipTypes() YIELD relationshipType
+RETURN relationshipType;
+
+// 2. Đếm số lượng ERC20_TRANSFER relationships
+MATCH ()-[r:ERC20_TRANSFER]->()
+RETURN count(r) as erc20_transfers;
+
+// 3. Xem một vài ERC20_TRANSFER relationships mẫu
+MATCH (from:Wallet)-[r:ERC20_TRANSFER]->(to:Wallet)
+RETURN from.address, to.address, r.value, r.contract_address, r.tx_hash
+LIMIT 5;
+
+// 4. Kiểm tra ERC20 contracts
+MATCH (c:ERC20Contract)
+RETURN c.address, c.name, c.symbol
+LIMIT 5;
