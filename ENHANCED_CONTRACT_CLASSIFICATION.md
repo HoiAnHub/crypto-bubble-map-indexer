@@ -311,28 +311,3 @@ The Enhanced Contract Classification System provides:
 7. **Scalable Architecture** for future enhancements
 
 This system transforms our blockchain indexer from a basic transaction processor into an intelligent contract analysis platform, enabling sophisticated DeFi ecosystem mapping and analytics.
-
-🚀 Enhanced Address Database (400+ addresses total)
-1. Exchange Patterns (200+ addresses):
-Global Major: Binance (10), Coinbase (10), Kraken (8), Huobi (7), OKEx (5), Bitfinex (5), Gemini (4)
-Regional Asian: Bithumb, Upbit, Coinone, Korbit (Korea), BitFlyer, Coincheck, Zaif (Japan)
-Indian: WazirX, CoinDCX
-European: Bitstamp, Luno, BTCTurk
-North American: FTX, Crypto.com, KuCoin, Gate.io, Bittrex, Poloniex
-Canadian: Coinsquare, Bitbuy
-2. DeFi Protocol Addresses (80+ contracts):
-DEX: Uniswap V2/V3, SushiSwap, Curve, Balancer, 1inch
-Lending: Compound, Aave, MakerDAO với đầy đủ tokens và contracts
-Infrastructure: Chainlink oracles, Yearn vaults
-Tokens: WETH, WBTC, stablecoins, gaming tokens
-Cross-chain: Bridge contracts, Tornado Cash privacy contracts
-NFT: OpenSea, LooksRare, Foundation, X2Y2
-Multisig: Gnosis Safe, celebrity wallets
-3. Risk & Compliance Database (100+ addresses):
-Major Hacks: The DAO, Parity, Coincheck, Poly Network, Ronin Bridge, Wormhole
-DeFi Exploits: Cream, Harvest, Cover Protocol, Akropolis, Pickle Finance
-Scams: MMM Global, PlusToken, OneCoin, BitConnect, fake tokens
-Ransomware: WannaCry, Maze, REvil, Darkside, Conti
-APT Groups: Lazarus Group, state actors từ các nước
-OFAC Sanctions: North Korea, Iran, Russia, terrorism financing
-UN/EU Sanctions: Taliban, ISIS, Al-Qaeda, arms embargo
