@@ -56,7 +56,13 @@ func main() {
 			database.NewNeo4JERC20Repository,
 			database.NewNeo4jNodeClassificationRepository,
 			blockchain.NewERC20DecoderService,
-			blockchain.NewEthereumClient,
+			func(cfg *config.Config) *blockchain.EthereumClient {
+				if cfg.Ethereum.Enabled && cfg.Ethereum.RPCURL != "" {
+					return blockchain.NewEthereumClient(cfg.Ethereum.RPCURL)
+				}
+				// For development, use default client without real RPC
+				return blockchain.NewEthereumClient("")
+			},
 			messaging.NewNATSConsumer,
 		),
 

@@ -9,11 +9,12 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	App     AppConfig     `mapstructure:"app"`
-	NATS    NATSConfig    `mapstructure:"nats"`
-	Neo4J   Neo4JConfig   `mapstructure:"neo4j"`
-	Health  HealthConfig  `mapstructure:"health"`
-	Metrics MetricsConfig `mapstructure:"metrics"`
+	App      AppConfig      `mapstructure:"app"`
+	NATS     NATSConfig     `mapstructure:"nats"`
+	Neo4J    Neo4JConfig    `mapstructure:"neo4j"`
+	Ethereum EthereumConfig `mapstructure:"ethereum"`
+	Health   HealthConfig   `mapstructure:"health"`
+	Metrics  MetricsConfig  `mapstructure:"metrics"`
 }
 
 // AppConfig represents application-specific configuration
@@ -47,6 +48,12 @@ type Neo4JConfig struct {
 	ConnectTimeout               time.Duration `mapstructure:"connect_timeout"`
 	MaxConnectionPoolSize        int           `mapstructure:"max_connection_pool_size"`
 	ConnectionAcquisitionTimeout time.Duration `mapstructure:"connection_acquisition_timeout"`
+}
+
+// EthereumConfig represents Ethereum blockchain configuration
+type EthereumConfig struct {
+	RPCURL  string `mapstructure:"rpc_url"`
+	Enabled bool   `mapstructure:"enabled"`
 }
 
 // HealthConfig represents health check configuration
@@ -122,6 +129,10 @@ func setDefaults() {
 	viper.SetDefault("neo4j.connect_timeout", "10s")
 	viper.SetDefault("neo4j.max_connection_pool_size", 50)
 	viper.SetDefault("neo4j.connection_acquisition_timeout", "60s")
+
+	// Ethereum defaults
+	viper.SetDefault("ethereum.rpc_url", "")
+	viper.SetDefault("ethereum.enabled", false)
 
 	// Health defaults
 	viper.SetDefault("health.interval", "30s")
