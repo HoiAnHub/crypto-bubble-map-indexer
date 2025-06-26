@@ -35,13 +35,22 @@ var transferEventSignature = crypto.Keccak256Hash([]byte("Transfer(address,addre
 func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entity.Transaction) ([]*entity.ERC20Transfer, error) {
 	var transfers []*entity.ERC20Transfer
 
+	s.logger.Info("Attempting to decode ERC20 transfer",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("to", tx.To),
+		zap.String("data", tx.Data))
+
 	// Check if transaction has data (contract interaction)
 	if tx.Data == "" || tx.Data == "0x" {
+		s.logger.Info("No transaction data found, skipping ERC20 decode",
+			zap.String("tx_hash", tx.Hash))
 		return transfers, nil
 	}
 
 	// Check if transaction is to a contract (non-zero address)
 	if tx.To == "" || tx.To == "0x0000000000000000000000000000000000000000" {
+		s.logger.Info("Transaction to zero address, skipping ERC20 decode",
+			zap.String("tx_hash", tx.Hash))
 		return transfers, nil
 	}
 
@@ -51,13 +60,20 @@ func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entit
 
 	transfer, err := s.decodeDirectTransfer(tx)
 	if err != nil {
-		s.logger.Debug("Failed to decode direct transfer",
+		s.logger.Info("Failed to decode direct transfer",
 			zap.String("tx_hash", tx.Hash),
+			zap.String("data", tx.Data),
 			zap.Error(err))
 		return transfers, nil
 	}
 
 	if transfer != nil {
+		s.logger.Info("Successfully decoded ERC20 transfer",
+			zap.String("tx_hash", tx.Hash),
+			zap.String("contract", transfer.ContractAddress),
+			zap.String("from", transfer.From),
+			zap.String("to", transfer.To),
+			zap.String("value", transfer.Value))
 		transfers = append(transfers, transfer)
 	}
 
@@ -67,8 +83,14 @@ func (s *ERC20DecoderService) DecodeERC20Transfer(ctx context.Context, tx *entit
 // decodeDirectTransfer decodes direct ERC20 transfer function calls
 func (s *ERC20DecoderService) decodeDirectTransfer(tx *entity.Transaction) (*entity.ERC20Transfer, error) {
 	data := tx.Data
+
+	s.logger.Debug("Decoding direct transfer",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("original_data", data),
+		zap.Int("data_length", len(data)))
+
 	if len(data) < 10 { // 0x + 4 bytes method signature
-		return nil, fmt.Errorf("data too short")
+		return nil, fmt.Errorf("data too short: %d characters", len(data))
 	}
 
 	// Remove 0x prefix if present
@@ -76,13 +98,31 @@ func (s *ERC20DecoderService) decodeDirectTransfer(tx *entity.Transaction) (*ent
 		data = data[2:]
 	}
 
+	s.logger.Debug("Processing data without 0x prefix",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("processed_data", data),
+		zap.Int("processed_length", len(data)))
+
 	// Check if it's a transfer function call
 	// transfer(address,uint256) method signature: 0xa9059cbb
 	transferMethodSig := "a9059cbb"
 
-	if len(data) < 8 || !strings.HasPrefix(data, transferMethodSig) {
-		return nil, fmt.Errorf("not a transfer function call")
+	if len(data) < 8 {
+		return nil, fmt.Errorf("data too short for method signature: %d characters", len(data))
 	}
+
+	methodSig := strings.ToLower(data[:8])
+	if methodSig != transferMethodSig {
+		s.logger.Debug("Not a transfer function call",
+			zap.String("tx_hash", tx.Hash),
+			zap.String("found_method_sig", methodSig),
+			zap.String("expected_method_sig", transferMethodSig))
+		return nil, fmt.Errorf("not a transfer function call: found %s, expected %s", methodSig, transferMethodSig)
+	}
+
+	s.logger.Debug("Found transfer method signature",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("method_sig", methodSig))
 
 	// Decode the function parameters
 	// transfer(address to, uint256 value)
@@ -90,17 +130,32 @@ func (s *ERC20DecoderService) decodeDirectTransfer(tx *entity.Transaction) (*ent
 	// - value: 32 bytes (uint256)
 
 	if len(data) < 8+64+64 { // method sig + to address + value
-		return nil, fmt.Errorf("insufficient data for transfer function")
+		return nil, fmt.Errorf("insufficient data for transfer function: %d characters, need %d", len(data), 8+64+64)
 	}
 
 	// Extract 'to' address (bytes 8-72, take last 40 characters)
-	toHex := data[8+24 : 8+64] // Skip padding, get last 20 bytes
+	toHex := strings.ToLower(data[8+24 : 8+64]) // Skip padding, get last 20 bytes
 	toAddress := "0x" + toHex
 
 	// Extract value (bytes 72-136)
 	valueHex := data[8+64 : 8+128]
 	value := new(big.Int)
-	value.SetString(valueHex, 16)
+	_, success := value.SetString(valueHex, 16)
+	if !success {
+		return nil, fmt.Errorf("failed to parse value hex: %s", valueHex)
+	}
+
+	s.logger.Debug("Parsed transfer parameters",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("to_hex", toHex),
+		zap.String("to_address", toAddress),
+		zap.String("value_hex", valueHex),
+		zap.String("value_decimal", value.String()))
+
+	// Validate addresses
+	if len(toHex) != 40 {
+		return nil, fmt.Errorf("invalid to address length: %d characters", len(toHex))
+	}
 
 	// Create ERC20 transfer
 	transfer := &entity.ERC20Transfer{
