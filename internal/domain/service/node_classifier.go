@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+// BlockchainClient interface for checking contract bytecode
+type BlockchainClient interface {
+	// GetCode returns the bytecode of a contract address
+	// Returns empty string for EOA, non-empty for contracts
+	GetCode(ctx context.Context, address string) (string, error)
+
+	// IsContract checks if address is a contract (has bytecode)
+	IsContract(ctx context.Context, address string) (bool, error)
+}
+
 // NodeClassifierService handles node classification logic
 type NodeClassifierService struct {
 	rules            []entity.NodeClassificationRule
@@ -17,6 +27,7 @@ type NodeClassifierService struct {
 	blacklistedAddrs map[string]string   // address -> reason
 	sanctionedAddrs  map[string]string   // address -> sanction details
 	knownContracts   map[string]entity.NodeType
+	blockchainClient BlockchainClient // for checking contract bytecode
 }
 
 // NewNodeClassifierService creates a new node classifier service
@@ -27,12 +38,46 @@ func NewNodeClassifierService() *NodeClassifierService {
 		blacklistedAddrs: make(map[string]string),
 		sanctionedAddrs:  make(map[string]string),
 		knownContracts:   make(map[string]entity.NodeType),
+		blockchainClient: nil, // Will be set via SetBlockchainClient
 	}
 
 	service.initializeDefaultRules()
 	service.initializeKnownPatterns()
 
 	return service
+}
+
+// SetBlockchainClient sets the blockchain client for contract detection
+func (ncs *NodeClassifierService) SetBlockchainClient(client BlockchainClient) {
+	ncs.blockchainClient = client
+}
+
+// isContractAddress checks if an address is a contract by checking bytecode
+func (ncs *NodeClassifierService) isContractAddress(ctx context.Context, address string) (bool, error) {
+	if ncs.blockchainClient == nil {
+		// Fallback: check known contracts list
+		_, exists := ncs.knownContracts[strings.ToLower(address)]
+		return exists, nil
+	}
+
+	return ncs.blockchainClient.IsContract(ctx, address)
+}
+
+// detectContractType attempts to detect contract type from patterns and known lists
+func (ncs *NodeClassifierService) detectContractType(ctx context.Context, address string, isContract bool) entity.NodeType {
+	if !isContract {
+		return entity.NodeTypeUnknown
+	}
+
+	// Check known contracts first
+	if nodeType, exists := ncs.knownContracts[strings.ToLower(address)]; exists {
+		return nodeType
+	}
+
+	// Heuristic detection based on address patterns (if available in future)
+	// This could be enhanced with bytecode analysis
+
+	return entity.NodeTypeTokenContract // Default to token contract for unknown contracts
 }
 
 // ClassifyNode classifies a blockchain address into appropriate node type
@@ -77,16 +122,35 @@ func (ncs *NodeClassifierService) ClassifyNode(ctx context.Context, address stri
 		return classification, nil
 	}
 
-	// 2. Check known contracts
+	// 2. Check if address is a contract first (most important check)
+	isContract, err := ncs.isContractAddress(ctx, address)
+	if err != nil {
+		// Log error but continue with classification
+		fmt.Printf("Warning: Could not check if address %s is contract: %v\n", address, err)
+	}
+
+	// 3. Check known contracts
 	if nodeType, exists := ncs.knownContracts[address]; exists {
 		classification.PrimaryType = nodeType
 		classification.RiskLevel = nodeType.GetDefaultRiskLevel()
 		classification.ConfidenceScore = 0.9
 		classification.DetectionMethods = []string{string(entity.DetectionMethodManual)}
+		classification.Tags = append(classification.Tags, "known_contract")
 		return classification, nil
 	}
 
-	// 3. Check exchange patterns
+	// 4. If it's a contract but not in known list, detect contract type
+	if isContract {
+		contractType := ncs.detectContractType(ctx, address, isContract)
+		classification.PrimaryType = contractType
+		classification.RiskLevel = contractType.GetDefaultRiskLevel()
+		classification.ConfidenceScore = 0.6
+		classification.DetectionMethods = []string{string(entity.DetectionMethodHeuristic)}
+		classification.Tags = append(classification.Tags, "contract", "bytecode_detected")
+		return classification, nil
+	}
+
+	// 5. Check exchange patterns (only for non-contracts)
 	for exchange, patterns := range ncs.exchangePatterns {
 		for _, pattern := range patterns {
 			if matched, _ := regexp.MatchString(pattern, address); matched {
@@ -113,10 +177,20 @@ func (ncs *NodeClassifierService) ClassifyNode(ctx context.Context, address stri
 
 	// 6. Set default if still unknown
 	if classification.PrimaryType == entity.NodeTypeUnknown {
-		classification.PrimaryType = entity.NodeTypeEOA
-		classification.RiskLevel = entity.RiskLevelLow
-		classification.ConfidenceScore = 0.3
-		classification.DetectionMethods = []string{string(entity.DetectionMethodHeuristic)}
+		// Final check: if it's a contract, don't classify as EOA
+		if isContract {
+			classification.PrimaryType = entity.NodeTypeTokenContract // Default contract type
+			classification.RiskLevel = entity.RiskLevelLow
+			classification.ConfidenceScore = 0.4
+			classification.DetectionMethods = []string{string(entity.DetectionMethodHeuristic)}
+			classification.Tags = append(classification.Tags, "contract", "unclassified_contract")
+		} else {
+			classification.PrimaryType = entity.NodeTypeEOA
+			classification.RiskLevel = entity.RiskLevelLow
+			classification.ConfidenceScore = 0.3
+			classification.DetectionMethods = []string{string(entity.DetectionMethodHeuristic)}
+			classification.Tags = append(classification.Tags, "eoa")
+		}
 	}
 
 	return classification, nil
