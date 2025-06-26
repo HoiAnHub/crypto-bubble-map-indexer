@@ -54,13 +54,21 @@ func main() {
 			database.NewNeo4JWalletRepository,
 			database.NewNeo4JTransactionRepository,
 			database.NewNeo4JERC20Repository,
+			database.NewNeo4jNodeClassificationRepository,
 			blockchain.NewERC20DecoderService,
+			blockchain.NewEthereumClient,
 			messaging.NewNATSConsumer,
+		),
+
+		// Domain services
+		fx.Provide(
+			domain_service.NewNodeClassifierService,
 		),
 
 		// Application providers
 		fx.Provide(
 			app_service.NewIndexingApplicationService,
+			app_service.NewNodeClassificationAppService,
 		),
 
 		// Lifecycle hooks
@@ -104,6 +112,8 @@ func startIndexer(
 	lifecycle fx.Lifecycle,
 	consumer *messaging.NATSConsumer,
 	indexingService domain_service.IndexingService,
+	nodeClassifierService *domain_service.NodeClassifierService,
+	ethClient *blockchain.EthereumClient,
 	log *zap.Logger,
 	cfg *config.Config,
 	neo4jClient *database.Neo4JClient,
@@ -118,6 +128,11 @@ func startIndexer(
 				return fmt.Errorf("failed to connect to Neo4J: %w", err)
 			}
 			log.Info("Successfully connected to Neo4J database")
+
+			// Setup blockchain client for contract detection
+			log.Info("Setting up blockchain client for contract detection")
+			nodeClassifierService.SetBlockchainClient(ethClient)
+			log.Info("Blockchain client configured successfully")
 
 			// Debug: Log NATS configuration
 			log.Info("NATS Configuration",
