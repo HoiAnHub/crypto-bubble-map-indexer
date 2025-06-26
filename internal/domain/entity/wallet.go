@@ -13,6 +13,16 @@ type Wallet struct {
 	TotalSent         string    `json:"total_sent"`
 	TotalReceived     string    `json:"total_received"`
 	Network           string    `json:"network"`
+
+	// Enhanced node classification
+	NodeType            NodeType      `json:"node_type"`
+	RiskLevel           NodeRiskLevel `json:"risk_level"`
+	ConfidenceScore     float64       `json:"confidence_score"`
+	LastClassified      time.Time     `json:"last_classified"`
+	Tags                []string      `json:"tags"`
+	AssociatedExchanges []string      `json:"associated_exchanges"`
+	AssociatedProtocols []string      `json:"associated_protocols"`
+	IsContract          bool          `json:"is_contract"`
 }
 
 // WalletStats represents statistics for a wallet
