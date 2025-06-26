@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -466,4 +467,246 @@ func (r *Neo4JERC20Repository) GetERC20TransfersForWallet(ctx context.Context, a
 	}
 
 	return transfers, nil
+}
+
+// StoreContractClassification stores contract classification data
+func (r *Neo4JERC20Repository) StoreContractClassification(ctx context.Context, classification *entity.ContractClassification) error {
+	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
+	defer session.Close(ctx)
+
+	query := `
+		MERGE (contract:ERC20Contract {address: $address})
+		SET
+			contract.primary_type = $primary_type,
+			contract.secondary_types = $secondary_types,
+			contract.confidence_score = $confidence_score,
+			contract.detected_protocols = $detected_protocols,
+			contract.total_interactions = $total_interactions,
+			contract.unique_users = $unique_users,
+			contract.first_seen = datetime($first_seen),
+			contract.last_seen = datetime($last_seen),
+			contract.is_verified = $is_verified,
+			contract.verification_source = $verification_source,
+			contract.tags = $tags,
+			contract.network = $network,
+			contract.method_signatures = $method_signatures_json,
+			contract.interaction_patterns = $interaction_patterns_json
+	`
+
+	// Convert maps to JSON strings for storage
+	methodSigJSON, _ := json.Marshal(classification.MethodSignatures)
+	interactionPatternsJSON, _ := json.Marshal(classification.InteractionPatterns)
+
+	// Convert secondary types to strings
+	var secondaryTypes []string
+	for _, t := range classification.SecondaryTypes {
+		secondaryTypes = append(secondaryTypes, string(t))
+	}
+
+	parameters := map[string]interface{}{
+		"address":                   classification.Address,
+		"primary_type":              string(classification.PrimaryType),
+		"secondary_types":           secondaryTypes,
+		"confidence_score":          classification.ConfidenceScore,
+		"detected_protocols":        classification.DetectedProtocols,
+		"total_interactions":        classification.TotalInteractions,
+		"unique_users":              classification.UniqueUsers,
+		"first_seen":                classification.FirstSeen.Format("2006-01-02T15:04:05.000Z"),
+		"last_seen":                 classification.LastSeen.Format("2006-01-02T15:04:05.000Z"),
+		"is_verified":               classification.IsVerified,
+		"verification_source":       classification.VerificationSource,
+		"tags":                      classification.Tags,
+		"network":                   classification.Network,
+		"method_signatures_json":    string(methodSigJSON),
+		"interaction_patterns_json": string(interactionPatternsJSON),
+	}
+
+	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, query, parameters)
+	})
+
+	if err != nil {
+		r.logger.Error("Failed to store contract classification",
+			zap.String("address", classification.Address),
+			zap.Error(err))
+		return fmt.Errorf("failed to store contract classification: %w", err)
+	}
+
+	r.logger.Debug("Stored contract classification",
+		zap.String("address", classification.Address),
+		zap.String("primary_type", string(classification.PrimaryType)),
+		zap.Float64("confidence", classification.ConfidenceScore))
+
+	return nil
+}
+
+// GetContractClassification retrieves contract classification data
+func (r *Neo4JERC20Repository) GetContractClassification(ctx context.Context, contractAddress string) (*entity.ContractClassification, error) {
+	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
+	defer session.Close(ctx)
+
+	query := `
+		MATCH (contract:ERC20Contract {address: $address})
+		RETURN contract.primary_type as primary_type,
+			   contract.secondary_types as secondary_types,
+			   contract.confidence_score as confidence_score,
+			   contract.detected_protocols as detected_protocols,
+			   contract.total_interactions as total_interactions,
+			   contract.unique_users as unique_users,
+			   contract.first_seen as first_seen,
+			   contract.last_seen as last_seen,
+			   contract.is_verified as is_verified,
+			   contract.verification_source as verification_source,
+			   contract.tags as tags,
+			   contract.network as network,
+			   contract.method_signatures as method_signatures_json,
+			   contract.interaction_patterns as interaction_patterns_json
+	`
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, query, map[string]interface{}{"address": contractAddress})
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contract classification: %w", err)
+	}
+
+	records := result.(*neo4j.EagerResult).Records
+	if len(records) == 0 {
+		return nil, fmt.Errorf("contract classification not found")
+	}
+
+	record := records[0]
+
+	// Parse method signatures JSON
+	var methodSignatures map[string]int
+	if methodSigJSON, ok := record.Get("method_signatures_json"); ok && methodSigJSON != nil {
+		json.Unmarshal([]byte(methodSigJSON.(string)), &methodSignatures)
+	}
+
+	// Parse interaction patterns JSON
+	var interactionPatterns map[entity.ContractInteractionType]int
+	if patternsJSON, ok := record.Get("interaction_patterns_json"); ok && patternsJSON != nil {
+		json.Unmarshal([]byte(patternsJSON.(string)), &interactionPatterns)
+	}
+
+	// Parse secondary types
+	var secondaryTypes []entity.ContractType
+	if secTypes, ok := record.Get("secondary_types"); ok && secTypes != nil {
+		for _, t := range secTypes.([]interface{}) {
+			secondaryTypes = append(secondaryTypes, entity.ContractType(t.(string)))
+		}
+	}
+
+	classification := &entity.ContractClassification{
+		Address:             contractAddress,
+		PrimaryType:         entity.ContractType(record.AsMap()["primary_type"].(string)),
+		SecondaryTypes:      secondaryTypes,
+		ConfidenceScore:     record.AsMap()["confidence_score"].(float64),
+		DetectedProtocols:   record.AsMap()["detected_protocols"].([]string),
+		MethodSignatures:    methodSignatures,
+		InteractionPatterns: interactionPatterns,
+		TotalInteractions:   record.AsMap()["total_interactions"].(int64),
+		UniqueUsers:         record.AsMap()["unique_users"].(int64),
+		IsVerified:          record.AsMap()["is_verified"].(bool),
+		VerificationSource:  record.AsMap()["verification_source"].(string),
+		Tags:                record.AsMap()["tags"].([]string),
+		Network:             record.AsMap()["network"].(string),
+	}
+
+	return classification, nil
+}
+
+// UpdateContractClassification updates existing contract classification
+func (r *Neo4JERC20Repository) UpdateContractClassification(ctx context.Context, classification *entity.ContractClassification) error {
+	return r.StoreContractClassification(ctx, classification) // Same as store for now
+}
+
+// GetContractsByType retrieves contracts by type
+func (r *Neo4JERC20Repository) GetContractsByType(ctx context.Context, contractType entity.ContractType, limit int) ([]*entity.ERC20Contract, error) {
+	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
+	defer session.Close(ctx)
+
+	query := `
+		MATCH (contract:ERC20Contract)
+		WHERE contract.primary_type = $contract_type OR $contract_type IN contract.secondary_types
+		RETURN contract.address as address,
+			   contract.name as name,
+			   contract.symbol as symbol,
+			   contract.decimals as decimals,
+			   contract.first_seen as first_seen,
+			   contract.last_seen as last_seen,
+			   contract.total_txs as total_txs,
+			   contract.network as network,
+			   contract.primary_type as contract_type,
+			   contract.is_verified as is_verified
+		ORDER BY contract.total_interactions DESC
+		LIMIT $limit
+	`
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, query, map[string]interface{}{
+			"contract_type": string(contractType),
+			"limit":         limit,
+		})
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contracts by type: %w", err)
+	}
+
+	records := result.(*neo4j.EagerResult).Records
+	var contracts []*entity.ERC20Contract
+
+	for _, record := range records {
+		recordMap := record.AsMap()
+
+		contract := &entity.ERC20Contract{
+			Address:      recordMap["address"].(string),
+			Name:         recordMap["name"].(string),
+			Symbol:       recordMap["symbol"].(string),
+			Decimals:     int(recordMap["decimals"].(int64)),
+			TotalTxs:     recordMap["total_txs"].(int64),
+			Network:      recordMap["network"].(string),
+			ContractType: recordMap["contract_type"].(string),
+			IsVerified:   recordMap["is_verified"].(bool),
+		}
+
+		contracts = append(contracts, contract)
+	}
+
+	return contracts, nil
+}
+
+// GetContractClassificationStats retrieves classification statistics
+func (r *Neo4JERC20Repository) GetContractClassificationStats(ctx context.Context) (map[entity.ContractType]int, error) {
+	session := r.client.GetDriver().NewSession(ctx, neo4j.SessionConfig{})
+	defer session.Close(ctx)
+
+	query := `
+		MATCH (contract:ERC20Contract)
+		WHERE contract.primary_type IS NOT NULL
+		RETURN contract.primary_type as contract_type, count(*) as count
+		ORDER BY count DESC
+	`
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return tx.Run(ctx, query, map[string]interface{}{})
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contract classification stats: %w", err)
+	}
+
+	records := result.(*neo4j.EagerResult).Records
+	stats := make(map[entity.ContractType]int)
+
+	for _, record := range records {
+		recordMap := record.AsMap()
+		contractType := entity.ContractType(recordMap["contract_type"].(string))
+		count := int(recordMap["count"].(int64))
+		stats[contractType] = count
+	}
+
+	return stats, nil
 }

@@ -18,13 +18,15 @@ import (
 
 // ERC20DecoderService implements enhanced ERC20 and contract decoder service
 type ERC20DecoderService struct {
-	logger *logger.Logger
+	logger     *logger.Logger
+	classifier service.ContractClassifierService
 }
 
 // NewERC20DecoderService creates a new enhanced ERC20 decoder service
 func NewERC20DecoderService(logger *logger.Logger) service.ERC20DecoderService {
 	return &ERC20DecoderService{
-		logger: logger.WithComponent("erc20-decoder"),
+		logger:     logger.WithComponent("erc20-decoder"),
+		classifier: NewContractClassifierService(logger),
 	}
 }
 
@@ -624,6 +626,33 @@ func (s *ERC20DecoderService) createUnknownContractCallRecord(tx *entity.Transac
 		}
 	}
 
+	// Try to classify contract type from method signature
+	contractType := s.classifier.ClassifyFromMethodSignature(methodSig)
+
+	// Determine interaction type based on classification
+	interactionType := entity.InteractionUnknownContract
+	if contractType != entity.ContractTypeUnknown {
+		// Map contract type to interaction type
+		switch contractType {
+		case entity.ContractTypeDEX, entity.ContractTypeAMM, entity.ContractTypeUniswapV2:
+			interactionType = entity.InteractionSwap
+		case entity.ContractTypeLendingPool, entity.ContractTypeCompound, entity.ContractTypeAave:
+			if strings.Contains(strings.ToLower(methodSig), "withdraw") || methodSig == "2e1a7d4d" {
+				interactionType = entity.InteractionWithdraw
+			} else {
+				interactionType = entity.InteractionDeposit
+			}
+		case entity.ContractTypeMulticall:
+			interactionType = entity.InteractionMulticall
+		}
+	}
+
+	s.logger.Debug("Contract classification from method signature",
+		zap.String("tx_hash", tx.Hash),
+		zap.String("method_sig", methodSig),
+		zap.String("classified_type", string(contractType)),
+		zap.String("interaction_type", string(interactionType)))
+
 	return &entity.ERC20Transfer{
 		ContractAddress: tx.To,
 		From:            tx.From,
@@ -633,7 +662,7 @@ func (s *ERC20DecoderService) createUnknownContractCallRecord(tx *entity.Transac
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Network:         tx.Network,
-		InteractionType: entity.InteractionUnknownContract,
+		InteractionType: interactionType,
 		MethodSignature: methodSig,
 		Success:         true, // Assume success if transaction was mined
 	}

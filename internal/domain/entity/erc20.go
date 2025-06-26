@@ -108,3 +108,123 @@ func (c ContractInteractionType) GetRelationshipType() string {
 		return "CONTRACT_INTERACTION"
 	}
 }
+
+// ContractType represents different types of smart contracts
+type ContractType string
+
+const (
+	// Standard Contract Types
+	ContractTypeERC20   ContractType = "ERC20"
+	ContractTypeERC721  ContractType = "ERC721"
+	ContractTypeERC1155 ContractType = "ERC1155"
+
+	// DeFi Protocol Types
+	ContractTypeDEX         ContractType = "DEX"
+	ContractTypeAMM         ContractType = "AMM" // Automated Market Maker
+	ContractTypeLendingPool ContractType = "LENDING_POOL"
+	ContractTypeYieldFarm   ContractType = "YIELD_FARM"
+	ContractTypeVault       ContractType = "VAULT"
+	ContractTypeStaking     ContractType = "STAKING"
+
+	// DEX Specific Types
+	ContractTypeUniswapV2   ContractType = "UNISWAP_V2"
+	ContractTypeUniswapV3   ContractType = "UNISWAP_V3"
+	ContractTypeSushiSwap   ContractType = "SUSHISWAP"
+	ContractTypePancakeSwap ContractType = "PANCAKESWAP"
+	ContractType1inch       ContractType = "1INCH_AGGREGATOR"
+
+	// Lending Protocols
+	ContractTypeCompound ContractType = "COMPOUND"
+	ContractTypeAave     ContractType = "AAVE"
+	ContractTypeMakerDAO ContractType = "MAKERDAO"
+
+	// Bridge & Layer 2
+	ContractTypeBridge    ContractType = "BRIDGE"
+	ContractTypeL2Gateway ContractType = "L2_GATEWAY"
+
+	// Utility Contracts
+	ContractTypeMulticall ContractType = "MULTICALL"
+	ContractTypeProxy     ContractType = "PROXY"
+	ContractTypeWETH      ContractType = "WETH"
+
+	// Unknown/Generic
+	ContractTypeUnknown ContractType = "UNKNOWN"
+	ContractTypeGeneric ContractType = "GENERIC_CONTRACT"
+)
+
+// ContractClassification represents comprehensive contract classification data
+type ContractClassification struct {
+	Address             string                          `json:"address"`
+	PrimaryType         ContractType                    `json:"primary_type"`
+	SecondaryTypes      []ContractType                  `json:"secondary_types"`
+	ConfidenceScore     float64                         `json:"confidence_score"`     // 0.0 - 1.0
+	DetectedProtocols   []string                        `json:"detected_protocols"`   // ["uniswap", "compound"]
+	MethodSignatures    map[string]int                  `json:"method_signatures"`    // signature -> count
+	InteractionPatterns map[ContractInteractionType]int `json:"interaction_patterns"` // pattern -> count
+	TotalInteractions   int64                           `json:"total_interactions"`
+	UniqueUsers         int64                           `json:"unique_users"`
+	FirstSeen           time.Time                       `json:"first_seen"`
+	LastSeen            time.Time                       `json:"last_seen"`
+	IsVerified          bool                            `json:"is_verified"`
+	VerificationSource  string                          `json:"verification_source"` // "etherscan", "manual", "heuristic"
+	Tags                []string                        `json:"tags"`                // ["dex", "high-volume", "popular"]
+	Network             string                          `json:"network"`
+}
+
+// ClassificationRule represents rules for contract classification
+type ClassificationRule struct {
+	ContractType        ContractType              `json:"contract_type"`
+	RequiredMethods     []string                  `json:"required_methods"` // Must have all
+	OptionalMethods     []string                  `json:"optional_methods"` // Nice to have
+	ExcludeMethods      []string                  `json:"exclude_methods"`  // Must not have
+	InteractionPatterns []ContractInteractionType `json:"interaction_patterns"`
+	MinConfidence       float64                   `json:"min_confidence"`
+	Weight              float64                   `json:"weight"` // Rule importance
+}
+
+// GetContractTypeCategory returns the broad category of a contract type
+func (ct ContractType) GetContractTypeCategory() string {
+	switch ct {
+	case ContractTypeDEX, ContractTypeAMM, ContractTypeUniswapV2, ContractTypeUniswapV3,
+		ContractTypeSushiSwap, ContractTypePancakeSwap, ContractType1inch:
+		return "DEX"
+	case ContractTypeLendingPool, ContractTypeCompound, ContractTypeAave, ContractTypeMakerDAO:
+		return "LENDING"
+	case ContractTypeYieldFarm, ContractTypeVault, ContractTypeStaking:
+		return "YIELD"
+	case ContractTypeERC20, ContractTypeERC721, ContractTypeERC1155:
+		return "TOKEN"
+	case ContractTypeBridge, ContractTypeL2Gateway:
+		return "BRIDGE"
+	case ContractTypeMulticall, ContractTypeProxy, ContractTypeWETH:
+		return "UTILITY"
+	default:
+		return "OTHER"
+	}
+}
+
+// IsDefiProtocol checks if the contract type is a DeFi protocol
+func (ct ContractType) IsDefiProtocol() bool {
+	category := ct.GetContractTypeCategory()
+	return category == "DEX" || category == "LENDING" || category == "YIELD"
+}
+
+// GetTypicalMethods returns typical method signatures for this contract type
+func (ct ContractType) GetTypicalMethods() []string {
+	switch ct {
+	case ContractTypeDEX, ContractTypeAMM:
+		return []string{"7ff36ab5", "18cbafe5", "38ed1739", "e8e33700", "baa2abde"} // swap methods
+	case ContractTypeUniswapV2:
+		return []string{"7ff36ab5", "18cbafe5", "38ed1739", "e8e33700", "baa2abde", "022c0d9f"} // + swap exact
+	case ContractTypeLendingPool, ContractTypeCompound:
+		return []string{"d0e30db0", "2e1a7d4d", "a6afed95", "852a12e3"} // deposit, withdraw, mint, redeem
+	case ContractTypeAave:
+		return []string{"d65d7f80", "69328dec", "e8eda9df"} // deposit, withdraw, borrow
+	case ContractTypeWETH:
+		return []string{"d0e30db0", "2e1a7d4d"} // deposit, withdraw
+	case ContractTypeMulticall:
+		return []string{"ac9650d8", "5ae401dc"} // multicall, multicallWithDeadline
+	default:
+		return []string{}
+	}
+}

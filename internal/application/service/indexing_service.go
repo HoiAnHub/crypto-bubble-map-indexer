@@ -140,18 +140,7 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 
 				// Track unique contracts for creation
 				if _, exists := contractMap[transfer.ContractAddress]; !exists && transfer.ContractAddress != "ETH" {
-					contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
-						Address:      transfer.ContractAddress,
-						Name:         "Unknown Contract",
-						Symbol:       "UNK",
-						Decimals:     18,
-						FirstSeen:    transfer.Timestamp,
-						LastSeen:     transfer.Timestamp,
-						TotalTxs:     1,
-						Network:      transfer.Network,
-						ContractType: s.determineContractType(transfer.InteractionType),
-						IsVerified:   false,
-					}
+					contractMap[transfer.ContractAddress] = s.createEnhancedContract(transfer)
 				}
 
 				s.logger.Debug("Processed contract interaction",
@@ -404,15 +393,33 @@ func (s *IndexingApplicationService) processERC20Transfers(ctx context.Context, 
 	return nil
 }
 
-// determineContractType determines the contract type based on interaction type
-func (s *IndexingApplicationService) determineContractType(interactionType entity.ContractInteractionType) string {
+// determineContractType determines the contract type based on interaction type and classifier
+func (s *IndexingApplicationService) determineContractType(interactionType entity.ContractInteractionType, contractAddress string, methodSignature string) string {
+	// First, try to get a more specific classification if we have a classifier
+	// For now, use basic mapping based on interaction type
 	switch interactionType {
 	case entity.InteractionSwap:
-		return "DEX"
+		// Try to detect specific DEX types
+		switch methodSignature {
+		case "7ff36ab5", "18cbafe5", "38ed1739":
+			return "UNISWAP_V2"
+		case "022c0d9f":
+			return "UNISWAP_V2"
+		default:
+			return "DEX"
+		}
 	case entity.InteractionAddLiquidity, entity.InteractionRemoveLiquidity:
 		return "LIQUIDITY_POOL"
 	case entity.InteractionDeposit, entity.InteractionWithdraw:
-		return "DEFI_PROTOCOL"
+		// Try to detect specific lending protocols
+		switch methodSignature {
+		case "a6afed95", "852a12e3":
+			return "COMPOUND"
+		case "d65d7f80", "69328dec":
+			return "AAVE"
+		default:
+			return "DEFI_PROTOCOL"
+		}
 	case entity.InteractionMulticall:
 		return "MULTICALL"
 	case entity.InteractionTransfer, entity.InteractionTransferFrom,
@@ -422,5 +429,92 @@ func (s *IndexingApplicationService) determineContractType(interactionType entit
 		return "ETH"
 	default:
 		return "UNKNOWN"
+	}
+}
+
+// createEnhancedContract creates an enhanced contract with better classification
+func (s *IndexingApplicationService) createEnhancedContract(transfer *entity.ERC20Transfer) *entity.ERC20Contract {
+	contractType := s.determineContractType(transfer.InteractionType, transfer.ContractAddress, transfer.MethodSignature)
+
+	// Determine if contract is verified based on known signatures
+	isVerified := s.isKnownContract(transfer.MethodSignature)
+
+	return &entity.ERC20Contract{
+		Address:      transfer.ContractAddress,
+		Name:         s.generateContractName(contractType, transfer.ContractAddress),
+		Symbol:       s.generateContractSymbol(contractType),
+		Decimals:     18,
+		FirstSeen:    transfer.Timestamp,
+		LastSeen:     transfer.Timestamp,
+		TotalTxs:     1,
+		Network:      transfer.Network,
+		ContractType: contractType,
+		IsVerified:   isVerified,
+	}
+}
+
+// isKnownContract checks if this is a known contract based on method signatures
+func (s *IndexingApplicationService) isKnownContract(methodSignature string) bool {
+	knownSignatures := map[string]bool{
+		"7ff36ab5": true, // Uniswap swapExactETHForTokens
+		"18cbafe5": true, // Uniswap swapExactTokensForETH
+		"38ed1739": true, // Uniswap swapExactTokensForTokens
+		"a6afed95": true, // Compound mint
+		"852a12e3": true, // Compound redeem
+		"d65d7f80": true, // Aave deposit
+		"69328dec": true, // Aave withdraw
+		"ac9650d8": true, // Multicall
+		"d0e30db0": true, // WETH deposit
+		"2e1a7d4d": true, // WETH withdraw
+	}
+
+	return knownSignatures[methodSignature]
+}
+
+// generateContractName generates a descriptive name for the contract
+func (s *IndexingApplicationService) generateContractName(contractType, address string) string {
+	switch contractType {
+	case "UNISWAP_V2":
+		return "Uniswap V2 Router"
+	case "DEX":
+		return "DEX Contract"
+	case "COMPOUND":
+		return "Compound Protocol"
+	case "AAVE":
+		return "Aave Protocol"
+	case "DEFI_PROTOCOL":
+		return "DeFi Protocol"
+	case "LIQUIDITY_POOL":
+		return "Liquidity Pool"
+	case "MULTICALL":
+		return "Multicall Contract"
+	case "ERC20":
+		return "ERC20 Token"
+	default:
+		return fmt.Sprintf("Contract %s", address[:10]+"...")
+	}
+}
+
+// generateContractSymbol generates a symbol for the contract
+func (s *IndexingApplicationService) generateContractSymbol(contractType string) string {
+	switch contractType {
+	case "UNISWAP_V2":
+		return "UNI-V2"
+	case "DEX":
+		return "DEX"
+	case "COMPOUND":
+		return "COMP"
+	case "AAVE":
+		return "AAVE"
+	case "DEFI_PROTOCOL":
+		return "DEFI"
+	case "LIQUIDITY_POOL":
+		return "LP"
+	case "MULTICALL":
+		return "MULTI"
+	case "ERC20":
+		return "ERC20"
+	default:
+		return "UNK"
 	}
 }

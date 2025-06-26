@@ -24,4 +24,20 @@ type ERC20Repository interface {
 
 	// GetERC20TransfersForWallet retrieves all ERC20 transfers for a wallet
 	GetERC20TransfersForWallet(ctx context.Context, address string, limit int) ([]*entity.ERC20Transfer, error)
+
+	// Contract Classification Methods
+	// StoreContractClassification stores contract classification data
+	StoreContractClassification(ctx context.Context, classification *entity.ContractClassification) error
+
+	// GetContractClassification retrieves contract classification data
+	GetContractClassification(ctx context.Context, contractAddress string) (*entity.ContractClassification, error)
+
+	// UpdateContractClassification updates existing contract classification
+	UpdateContractClassification(ctx context.Context, classification *entity.ContractClassification) error
+
+	// GetContractsByType retrieves contracts by type
+	GetContractsByType(ctx context.Context, contractType entity.ContractType, limit int) ([]*entity.ERC20Contract, error)
+
+	// GetContractClassificationStats retrieves classification statistics
+	GetContractClassificationStats(ctx context.Context) (map[entity.ContractType]int, error)
 }
