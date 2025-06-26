@@ -131,56 +131,53 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 				zap.String("to", tx.To),
 				zap.String("data", tx.Data),
 				zap.Error(err))
-			continue // Skip ERC20 processing for this transaction
-		}
-
-		// Log if no ERC20 transfers found
-		if len(erc20Transfers) == 0 {
+			// Continue to process regular transaction even if ERC20 decode fails
+		} else if len(erc20Transfers) == 0 {
 			s.logger.Debug("No ERC20 transfers decoded",
 				zap.String("tx_hash", tx.Hash),
 				zap.String("from", tx.From),
 				zap.String("to", tx.To),
 				zap.String("data", tx.Data))
-			continue
-		}
+			// Continue to process regular transaction even if no ERC20 transfers found
+		} else {
+			// Process each ERC20 transfer
+			for _, transfer := range erc20Transfers {
+				s.logger.Info("Found ERC20 transfer in batch",
+					zap.String("tx_hash", tx.Hash),
+					zap.String("from", transfer.From),
+					zap.String("to", transfer.To),
+					zap.String("contract", transfer.ContractAddress),
+					zap.String("value", transfer.Value))
 
-		// Process each ERC20 transfer
-		for _, transfer := range erc20Transfers {
-			s.logger.Info("Found ERC20 transfer in batch",
-				zap.String("tx_hash", tx.Hash),
-				zap.String("from", transfer.From),
-				zap.String("to", transfer.To),
-				zap.String("contract", transfer.ContractAddress),
-				zap.String("value", transfer.Value))
-
-			// Prepare ERC20 contract
-			if _, exists := contractMap[transfer.ContractAddress]; !exists {
-				contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
-					Address:   transfer.ContractAddress,
-					Name:      "Unknown Token",
-					Symbol:    "UNK",
-					Decimals:  18,
-					FirstSeen: transfer.Timestamp,
-					LastSeen:  transfer.Timestamp,
-					TotalTxs:  1,
-					Network:   transfer.Network,
+				// Prepare ERC20 contract
+				if _, exists := contractMap[transfer.ContractAddress]; !exists {
+					contractMap[transfer.ContractAddress] = &entity.ERC20Contract{
+						Address:   transfer.ContractAddress,
+						Name:      "Unknown Token",
+						Symbol:    "UNK",
+						Decimals:  18,
+						FirstSeen: transfer.Timestamp,
+						LastSeen:  transfer.Timestamp,
+						TotalTxs:  1,
+						Network:   transfer.Network,
+					}
+				} else {
+					contractMap[transfer.ContractAddress].LastSeen = transfer.Timestamp
+					contractMap[transfer.ContractAddress].TotalTxs++
 				}
-			} else {
-				contractMap[transfer.ContractAddress].LastSeen = transfer.Timestamp
-				contractMap[transfer.ContractAddress].TotalTxs++
-			}
 
-			// Prepare ERC20 transfer relationship
-			transferRel := &entity.ERC20TransferRelationship{
-				FromAddress:     transfer.From,
-				ToAddress:       transfer.To,
-				ContractAddress: transfer.ContractAddress,
-				Value:           transfer.Value,
-				TxHash:          transfer.TxHash,
-				Timestamp:       transfer.Timestamp,
-				Network:         transfer.Network,
+				// Prepare ERC20 transfer relationship
+				transferRel := &entity.ERC20TransferRelationship{
+					FromAddress:     transfer.From,
+					ToAddress:       transfer.To,
+					ContractAddress: transfer.ContractAddress,
+					Value:           transfer.Value,
+					TxHash:          transfer.TxHash,
+					Timestamp:       transfer.Timestamp,
+					Network:         transfer.Network,
+				}
+				erc20Relationships = append(erc20Relationships, transferRel)
 			}
-			erc20Relationships = append(erc20Relationships, transferRel)
 		}
 	}
 
@@ -198,6 +195,17 @@ func (s *IndexingApplicationService) ProcessTransactionBatch(ctx context.Context
 	}
 
 	// Batch create regular transaction relationships
+	s.logger.Info("About to create regular transaction relationships",
+		zap.Int("relationships_count", len(relationships)))
+
+	if len(relationships) > 0 {
+		s.logger.Info("Sample relationships data",
+			zap.String("first_from", relationships[0].FromAddress),
+			zap.String("first_to", relationships[0].ToAddress),
+			zap.String("first_value", relationships[0].Value),
+			zap.String("first_hash", relationships[0].TxHash))
+	}
+
 	if err := s.transactionRepo.BatchCreateRelationships(ctx, relationships); err != nil {
 		return fmt.Errorf("failed to batch create relationships: %w", err)
 	}

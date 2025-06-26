@@ -57,25 +57,17 @@ func (r *Neo4JTransactionRepository) CreateTransactionRelationship(ctx context.C
 	`
 
 	// Create a tx_detail string in format "hash:value:timestamp"
-	// txDetail := fmt.Sprintf("%s:%s:%s",
-	// 	rel.TxHash,
-	// 	rel.Value,
-	// 	rel.Timestamp.Format("2006-01-02T15:04:05.000Z"))
-	// Convert txDetail to array of Object
-	txDetailArray := []map[string]interface{}{
-		{
-			"hash":      rel.TxHash,
-			"value":     rel.Value,
-			"timestamp": rel.Timestamp.Format("2006-01-02T15:04:05.000Z"),
-		},
-	}
+	txDetail := fmt.Sprintf("%s:%s:%s",
+		rel.TxHash,
+		rel.Value,
+		rel.Timestamp.Format("2006-01-02T15:04:05.000Z"))
 
 	params := map[string]interface{}{
 		"from_address": rel.FromAddress,
 		"to_address":   rel.ToAddress,
 		"value":        rel.Value,
 		"timestamp":    rel.Timestamp,
-		"tx_detail":    txDetailArray,
+		"tx_detail":    txDetail,
 	}
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -149,21 +141,15 @@ func (r *Neo4JTransactionRepository) BatchCreateRelationships(ctx context.Contex
 		// Format the timestamp as ISO-8601 string for Neo4J
 		timestampStr := rel.Timestamp.Format("2006-01-02T15:04:05.000Z")
 
-		// Convert txDetail to array of Object
-		txDetailArray := []map[string]interface{}{
-			{
-				"hash":      rel.TxHash,
-				"value":     rel.Value,
-				"timestamp": timestampStr,
-			},
-		}
+		// Create a simple tx_detail string
+		txDetail := fmt.Sprintf("%s:%s:%s", rel.TxHash, rel.Value, timestampStr)
 
 		relData = append(relData, map[string]interface{}{
 			"from_address": rel.FromAddress,
 			"to_address":   rel.ToAddress,
 			"value":        rel.Value,
 			"timestamp":    timestampStr,
-			"tx_detail":    txDetailArray,
+			"tx_detail":    txDetail,
 		})
 	}
 
